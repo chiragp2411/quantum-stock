@@ -13,6 +13,7 @@ from app.stocks.router import router as stocks_router
 from app.concalls.router import router as concalls_router
 from app.valuation.router import router as valuation_router
 from app.news.router import router as news_router
+from app.notes.router import router as notes_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,19 +23,26 @@ logger = logging.getLogger(__name__)
 
 _ollama_ok = False
 _spacy_ok = False
+_gemini_ok = False
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _ollama_ok, _spacy_ok
+    global _ollama_ok, _spacy_ok, _gemini_ok
 
     ensure_indexes()
     _reset_stuck_analyses()
 
+    provider = settings.analysis_provider.lower()
+    if provider == "gemini":
+        _gemini_ok = _check_gemini()
     _ollama_ok = _check_ollama()
     _spacy_ok = _check_spacy()
 
-    logger.info("QuantumStock backend started")
+    logger.info(
+        "QuantumStock backend started (analysis_provider=%s, gemini=%s, ollama=%s)",
+        settings.analysis_provider, _gemini_ok, _ollama_ok,
+    )
     yield
     client = get_client()
     client.close()
@@ -105,10 +113,40 @@ def _check_spacy() -> bool:
         return False
 
 
+def _check_gemini() -> bool:
+    """Verify Gemini API key and model availability at startup."""
+    if not settings.gemini_api_key:
+        logger.warning(
+            "GEMINI_API_KEY not set. Set ANALYSIS_PROVIDER=gemini and "
+            "GEMINI_API_KEY in .env to use Gemini."
+        )
+        return False
+    try:
+        from google import genai
+
+        client = genai.Client(api_key=settings.gemini_api_key)
+        models = client.models.list()
+        model_names = [m.name for m in models]
+        target = settings.gemini_model
+        found = any(target in name for name in model_names)
+        if found:
+            logger.info("Gemini model '%s' available", target)
+        else:
+            logger.warning(
+                "Gemini model '%s' not found in available models. "
+                "Check GEMINI_MODEL in .env.",
+                target,
+            )
+        return True
+    except Exception as exc:
+        logger.warning("Gemini API check failed: %s", exc)
+        return False
+
+
 app = FastAPI(
     title="QuantumStock API",
-    description="Personal equity research tool inspired by Peter Lynch",
-    version="2.0.0",
+    description="Personal equity research tool for Indian markets",
+    version="3.0.0",
     lifespan=lifespan,
 )
 
@@ -125,6 +163,7 @@ app.include_router(stocks_router)
 app.include_router(concalls_router)
 app.include_router(valuation_router)
 app.include_router(news_router)
+app.include_router(notes_router)
 
 
 @app.get("/api/health")
@@ -132,6 +171,9 @@ def health():
     return {
         "status": "ok",
         "app": "QuantumStock",
+        "analysis_provider": settings.analysis_provider,
+        "gemini_connected": _gemini_ok,
+        "gemini_model": settings.gemini_model if _gemini_ok else None,
         "ollama_connected": _ollama_ok,
         "ollama_model": settings.ollama_model,
         "spacy_loaded": _spacy_ok,

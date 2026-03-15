@@ -7,16 +7,38 @@ import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, TrendingUp, Shield, Zap, BarChart3 } from "lucide-react";
-import { toast } from "sonner";
+import { Loader2, BarChart3, Brain, Target, TrendingUp, AlertCircle } from "lucide-react";
 
-export default function SignupPage() {
-  const { signup, isAuthenticated, loading: authLoading } = useAuth();
+const FEATURES = [
+  {
+    icon: Brain,
+    title: "AI Con-Call Analysis",
+    description: "Upload earnings transcripts and get AI-powered insights on management tone, guidance, and execution.",
+  },
+  {
+    icon: Target,
+    title: "Forward Valuation",
+    description: "Run base/bull/bear scenarios with 4-phase valuation matrix to find bargains.",
+  },
+  {
+    icon: BarChart3,
+    title: "Guidance Tracking",
+    description: "Track whether management walks the talk — guidance vs actuals across quarters.",
+  },
+  {
+    icon: TrendingUp,
+    title: "Growth Classification",
+    description: "Auto-classify stocks as Fast Growers, Stalwarts, Cyclicals, and more.",
+  },
+];
+
+export default function LoginPage() {
+  const { login, isAuthenticated, loading: authLoading } = useAuth();
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     if (!authLoading && isAuthenticated) {
@@ -34,15 +56,16 @@ export default function SignupPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (password !== confirmPassword) {
-      toast.error("Passwords do not match");
-      return;
-    }
+    setError("");
     setLoading(true);
     try {
-      await signup(username, password);
-    } catch {
-      toast.error("Signup failed. Username may already be taken.");
+      await login(username, password);
+      router.push("/dashboard");
+    } catch (err: unknown) {
+      const message =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data
+          ?.detail || "Invalid username or password";
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -50,14 +73,13 @@ export default function SignupPage() {
 
   return (
     <div className="flex min-h-screen">
-      {/* Left hero panel */}
       <div className="hidden lg:flex lg:w-[55%] relative overflow-hidden bg-gradient-to-br from-emerald-950 via-slate-900 to-slate-950">
         <div className="absolute inset-0 opacity-[0.04]" style={{
           backgroundImage: "linear-gradient(rgba(255,255,255,.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.1) 1px, transparent 1px)",
           backgroundSize: "60px 60px",
         }} />
-        <div className="absolute top-1/3 left-1/3 w-96 h-96 bg-emerald-500/10 rounded-full blur-[120px]" />
-        <div className="absolute bottom-1/3 right-1/3 w-72 h-72 bg-blue-500/8 rounded-full blur-[100px]" />
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-emerald-500/10 rounded-full blur-[120px]" />
+        <div className="absolute bottom-1/4 right-1/4 w-72 h-72 bg-blue-500/8 rounded-full blur-[100px]" />
 
         <div className="relative z-10 flex flex-col justify-between p-12 xl:p-16 w-full">
           <div className="flex items-center gap-3">
@@ -72,38 +94,43 @@ export default function SignupPage() {
           <div className="max-w-lg space-y-8">
             <div className="space-y-4">
               <h1 className="text-4xl xl:text-5xl font-bold text-white leading-tight tracking-tight">
-                Start your
+                Your AI-powered
                 <br />
-                <span className="text-emerald-400">research journey</span>
+                <span className="text-emerald-400">equity research</span>
+                <br />
+                co-pilot
               </h1>
               <p className="text-lg text-slate-400 leading-relaxed">
-                Create an account to unlock AI-powered analysis for Indian equities.
+                Analyze earnings calls, track management guidance, and find
+                undervalued stocks with forward growth-based valuation.
               </p>
             </div>
 
-            <div className="space-y-5">
-              {[
-                { icon: Zap, text: "Analyze earnings calls in seconds" },
-                { icon: BarChart3, text: "Track guidance across quarters" },
-                { icon: Shield, text: "All data stored locally on your machine" },
-              ].map((item) => (
-                <div key={item.text} className="flex items-center gap-3">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10">
-                    <item.icon className="h-4 w-4 text-emerald-400" />
+            <div className="grid gap-5">
+              {FEATURES.map((f) => (
+                <div key={f.title} className="flex items-start gap-4 group">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/5 border border-white/10 group-hover:bg-emerald-500/10 group-hover:border-emerald-500/20 transition-colors">
+                    <f.icon className="h-5 w-5 text-emerald-400" />
                   </div>
-                  <span className="text-sm text-slate-400">{item.text}</span>
+                  <div>
+                    <h3 className="text-sm font-semibold text-white">
+                      {f.title}
+                    </h3>
+                    <p className="text-sm text-slate-500 leading-relaxed">
+                      {f.description}
+                    </p>
+                  </div>
                 </div>
               ))}
             </div>
           </div>
 
           <p className="text-xs text-slate-600">
-            Built for Indian markets (NSE/BSE) &middot; Powered by Local AI
+            Built for Indian markets (NSE/BSE) &middot; Powered by Gemini AI
           </p>
         </div>
       </div>
 
-      {/* Right form panel */}
       <div className="flex flex-1 items-center justify-center px-6 py-12 lg:px-12">
         <div className="w-full max-w-sm space-y-8">
           <div className="flex flex-col items-center gap-3 lg:hidden">
@@ -116,13 +143,18 @@ export default function SignupPage() {
           </div>
 
           <div className="space-y-2">
-            <h2 className="text-2xl font-bold tracking-tight">
-              Create account
-            </h2>
+            <h2 className="text-2xl font-bold tracking-tight">Welcome back</h2>
             <p className="text-sm text-muted-foreground">
-              Set up your QuantumStock account to get started
+              Sign in to your account to continue your research
             </p>
           </div>
+
+          {error && (
+            <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              {error}
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="space-y-2">
@@ -131,11 +163,10 @@ export default function SignupPage() {
               </Label>
               <Input
                 id="username"
-                placeholder="Choose a username"
+                placeholder="Enter your username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 required
-                minLength={3}
                 autoComplete="username"
                 className="h-11"
               />
@@ -147,27 +178,11 @@ export default function SignupPage() {
               <Input
                 id="password"
                 type="password"
-                placeholder="At least 6 characters"
+                placeholder="Enter your password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                minLength={6}
-                autoComplete="new-password"
-                className="h-11"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="confirm-password" className="text-sm font-medium">
-                Confirm Password
-              </Label>
-              <Input
-                id="confirm-password"
-                type="password"
-                placeholder="Repeat your password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                autoComplete="new-password"
+                autoComplete="current-password"
                 className="h-11"
               />
             </div>
@@ -179,17 +194,17 @@ export default function SignupPage() {
               {loading ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : null}
-              Create account
+              Sign in
             </Button>
           </form>
 
           <p className="text-center text-sm text-muted-foreground">
-            Already have an account?{" "}
+            Don&apos;t have an account?{" "}
             <Link
-              href="/login"
+              href="/signup"
               className="text-emerald-500 hover:text-emerald-400 font-medium underline-offset-4 hover:underline transition-colors"
             >
-              Sign in
+              Create account
             </Link>
           </p>
         </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 import api from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,11 @@ import {
   ArrowUp,
   Edit3,
   Loader2,
+  AlertTriangle,
+  CheckCircle2,
+  XCircle,
+  MinusCircle,
+  Clock,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -38,6 +43,9 @@ interface TrackerRow {
   reasons: string;
   new_guidance: Record<string, string>;
   trajectory: string;
+  surprise?: string | null;
+  contradictions?: string[];
+  tone_score?: number;
 }
 
 interface TrackerTableProps {
@@ -55,72 +63,123 @@ export function TrackerTable({
 }: TrackerTableProps) {
   if (tracker.length === 0) {
     return (
-      <div className="text-center py-8 text-sm text-muted-foreground">
-        No tracker data available yet. Upload and analyze con-call transcripts to
-        build the guidance tracker.
+      <div className="rounded-xl border border-dashed border-border/60 bg-card/30 p-12 text-center">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-muted/50 mx-auto mb-4">
+          <Clock className="h-6 w-6 text-muted-foreground/50" />
+        </div>
+        <p className="text-sm font-medium text-muted-foreground">No tracker data available yet</p>
+        <p className="text-xs text-muted-foreground/60 mt-1">
+          Upload and analyze con-call transcripts to build the guidance tracker
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="rounded-lg border border-border/40 overflow-x-auto">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="w-24">Period</TableHead>
-            <TableHead>Previous Guidance</TableHead>
-            <TableHead>Actuals</TableHead>
-            <TableHead className="w-24">Met/Missed</TableHead>
-            <TableHead>New Guidance</TableHead>
-            <TableHead className="w-24">Trajectory</TableHead>
-            <TableHead className="w-16" />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {tracker.map((row) => (
-            <TableRow key={row.period}>
-              <TableCell className="font-medium">{row.period}</TableCell>
-              <TableCell>
-                <GuidanceChips data={row.prev_guidance} />
-              </TableCell>
-              <TableCell>
-                <GuidanceChips data={row.actuals} />
-              </TableCell>
-              <TableCell>
-                <MetBadge status={row.met_missed} />
-              </TableCell>
-              <TableCell>
-                <GuidanceChips data={row.new_guidance} />
-              </TableCell>
-              <TableCell>
-                <TrajectoryIcon direction={row.trajectory} />
-              </TableCell>
-              <TableCell>
-                <OverrideDialog
-                  symbol={symbol}
-                  period={row.period}
-                  concallId={concallIds[row.period]}
-                  onDone={onRefresh}
-                />
-              </TableCell>
+    <div className="space-y-4">
+      <div className="rounded-xl border border-border/40 overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="w-28 font-semibold text-xs uppercase tracking-wider">Period</TableHead>
+              <TableHead className="font-semibold text-xs uppercase tracking-wider">Previous Guidance</TableHead>
+              <TableHead className="font-semibold text-xs uppercase tracking-wider">Actuals</TableHead>
+              <TableHead className="w-24 font-semibold text-xs uppercase tracking-wider">Delivered</TableHead>
+              <TableHead className="font-semibold text-xs uppercase tracking-wider">New Guidance</TableHead>
+              <TableHead className="w-28 font-semibold text-xs uppercase tracking-wider">Trajectory</TableHead>
+              <TableHead className="w-12" />
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {tracker.map((row, idx) => (
+              <React.Fragment key={row.period}>
+                <TableRow className="group">
+                  <TableCell className="font-semibold text-sm">
+                    <div className="flex flex-col gap-0.5">
+                      <span>{row.period}</span>
+                      {row.tone_score != null && (
+                        <span className={`text-[10px] font-medium tabular-nums ${
+                          row.tone_score >= 7 ? "text-emerald-400" : row.tone_score >= 4 ? "text-blue-400" : "text-red-400"
+                        }`}>
+                          Tone: {row.tone_score}/10
+                        </span>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <GuidanceChips data={row.prev_guidance} />
+                  </TableCell>
+                  <TableCell>
+                    <GuidanceChips data={row.actuals} />
+                  </TableCell>
+                  <TableCell>
+                    <MetBadge status={row.met_missed} />
+                  </TableCell>
+                  <TableCell>
+                    <GuidanceChips data={row.new_guidance} variant="new" />
+                  </TableCell>
+                  <TableCell>
+                    <TrajectoryBadge direction={row.trajectory} />
+                  </TableCell>
+                  <TableCell>
+                    <OverrideDialog
+                      symbol={symbol}
+                      period={row.period}
+                      concallId={concallIds[row.period]}
+                      onDone={onRefresh}
+                    />
+                  </TableCell>
+                </TableRow>
+
+                {(row.surprise || (row.contradictions && row.contradictions.length > 0)) && (
+                  <TableRow className="border-t-0 bg-muted/15">
+                    <TableCell colSpan={7} className="py-2.5 pl-8">
+                      <div className="flex flex-col gap-2">
+                        {row.surprise && (
+                          <div className="flex items-start gap-2 text-xs text-muted-foreground">
+                            <span className="text-blue-400 font-medium shrink-0">Surprise:</span>
+                            <span className="italic">{row.surprise}</span>
+                          </div>
+                        )}
+                        {row.contradictions && row.contradictions.length > 0 && (
+                          <div className="flex flex-wrap items-start gap-1.5">
+                            <AlertTriangle className="h-3 w-3 text-amber-400 mt-0.5 shrink-0" />
+                            {row.contradictions.map((c, i) => (
+                              <Badge key={i} variant="outline" className="text-[10px] bg-amber-500/8 text-amber-400 border-amber-500/15 font-normal">
+                                {c}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+              </React.Fragment>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
     </div>
   );
 }
 
-function GuidanceChips({ data }: { data: Record<string, string> }) {
+function GuidanceChips({ data, variant = "default" }: { data: Record<string, string>; variant?: "default" | "new" }) {
   const entries = Object.entries(data);
   if (entries.length === 0) {
-    return <span className="text-xs text-muted-foreground">—</span>;
+    return <span className="text-xs text-muted-foreground/50">—</span>;
   }
   return (
     <div className="flex flex-wrap gap-1">
       {entries.map(([key, val]) => (
-        <Badge key={key} variant="outline" className="text-xs font-normal">
-          <span className="capitalize">{key}:</span>&nbsp;{val}
+        <Badge
+          key={key}
+          variant="outline"
+          className={`text-[11px] font-normal ${
+            variant === "new" ? "bg-emerald-500/8 border-emerald-500/15 text-emerald-400" : ""
+          }`}
+        >
+          <span className="capitalize font-medium">{key.replace(/_/g, " ")}:</span>&nbsp;{val}
         </Badge>
       ))}
     </div>
@@ -130,40 +189,59 @@ function GuidanceChips({ data }: { data: Record<string, string> }) {
 function MetBadge({ status }: { status: string }) {
   if (status === "met") {
     return (
-      <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
+      <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 gap-1">
+        <CheckCircle2 className="h-3 w-3" />
         Met
       </Badge>
     );
   }
   if (status === "missed") {
     return (
-      <Badge className="bg-red-500/10 text-red-400 border-red-500/20">
+      <Badge className="bg-red-500/10 text-red-400 border-red-500/20 gap-1">
+        <XCircle className="h-3 w-3" />
         Missed
       </Badge>
     );
   }
   if (status === "partial") {
     return (
-      <Badge className="bg-amber-500/10 text-amber-500 border-amber-500/20">
+      <Badge className="bg-amber-500/10 text-amber-500 border-amber-500/20 gap-1">
+        <MinusCircle className="h-3 w-3" />
         Partial
       </Badge>
     );
   }
   return (
-    <Badge variant="outline" className="text-muted-foreground">
+    <Badge variant="outline" className="text-muted-foreground/60 gap-1">
+      <Clock className="h-3 w-3" />
       Pending
     </Badge>
   );
 }
 
-function TrajectoryIcon({ direction }: { direction: string }) {
+function TrajectoryBadge({ direction }: { direction: string }) {
   if (direction === "up") {
-    return <ArrowUp className="h-4 w-4 text-emerald-400" />;
+    return (
+      <div className="flex items-center gap-1.5 text-emerald-400">
+        <ArrowUp className="h-4 w-4" />
+        <span className="text-xs font-semibold">Up</span>
+      </div>
+    );
   }
   if (direction === "down") {
-    return <ArrowDown className="h-4 w-4 text-red-400" />;
+    return (
+      <div className="flex items-center gap-1.5 text-red-400">
+        <ArrowDown className="h-4 w-4" />
+        <span className="text-xs font-semibold">Down</span>
+      </div>
+    );
   }
-  return <ArrowRight className="h-4 w-4 text-muted-foreground" />;
+  return (
+    <div className="flex items-center gap-1.5 text-muted-foreground/60">
+      <ArrowRight className="h-4 w-4" />
+      <span className="text-xs font-medium">Flat</span>
+    </div>
+  );
 }
 
 function OverrideDialog({
@@ -210,7 +288,7 @@ function OverrideDialog({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button variant="ghost" size="sm" className="h-7 w-7 p-0" />}>
+      <DialogTrigger render={<Button variant="ghost" size="sm" className="h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity" />}>
         <Edit3 className="h-3.5 w-3.5" />
       </DialogTrigger>
       <DialogContent>
@@ -219,8 +297,7 @@ function OverrideDialog({
         </DialogHeader>
         <div className="space-y-3 pt-2">
           <p className="text-sm text-muted-foreground">
-            Enter actual numbers when yfinance data is unavailable. Like
-            manually updating the car&apos;s speedometer reading.
+            Enter actual numbers when financial data is unavailable.
           </p>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -262,7 +339,7 @@ function OverrideDialog({
           </div>
           <Button
             onClick={handleSave}
-            className="w-full bg-emerald-600 hover:bg-emerald-700"
+            className="w-full bg-emerald-600 hover:bg-emerald-500"
             disabled={saving}
           >
             {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

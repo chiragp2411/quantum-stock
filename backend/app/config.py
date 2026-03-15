@@ -5,12 +5,23 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings
 
-_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
+_ROOT_DIR = _BACKEND_DIR.parent
+_ENV_FILE = (
+    str(_BACKEND_DIR / ".env")
+    if (_BACKEND_DIR / ".env").exists()
+    else str(_ROOT_DIR / ".env")
+)
 
 
 class Settings(BaseSettings):
     mongo_uri: str = "mongodb://localhost:27017"
     db_name: str = "quantumstock"
+
+    analysis_provider: str = "ollama"
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+
     ollama_model: str = "llama3.2:latest"
     ollama_base_url: str = "http://localhost:11434"
     spacy_model: str = "en_core_web_sm"

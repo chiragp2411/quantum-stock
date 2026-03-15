@@ -11,14 +11,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { LogOut, TrendingUp, User } from "lucide-react";
+import { LogOut, TrendingUp, User, Shield } from "lucide-react";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 
 export function Header() {
-  const { username, isAuthenticated, logout } = useAuth();
+  const { username, role, isAuthenticated, logout } = useAuth();
   const pathname = usePathname();
-
-  if (!isAuthenticated) return null;
 
   const isActive = (path: string) => pathname === path;
 
@@ -46,31 +44,59 @@ export function Header() {
             >
               Dashboard
             </Link>
+            <Link
+              href="/explore"
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                isActive("/explore")
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
+              }`}
+            >
+              Explore
+            </Link>
           </nav>
         </div>
 
         <div className="flex items-center gap-1.5">
           <ThemeToggle />
 
-          <DropdownMenu>
-            <DropdownMenuTrigger render={<Button variant="ghost" className="relative h-8 w-8 rounded-full" />}>
-              <Avatar className="h-8 w-8">
-                <AvatarFallback className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-semibold">
-                  {username?.charAt(0).toUpperCase() ?? "U"}
-                </AvatarFallback>
-              </Avatar>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem disabled>
-                <User className="mr-2 h-3.5 w-3.5" />
-                <span className="text-sm">{username}</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={logout}>
-                <LogOut className="mr-2 h-3.5 w-3.5" />
-                <span className="text-sm">Sign out</span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {isAuthenticated ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger render={<Button variant="ghost" className="relative h-8 w-8 rounded-full" />}>
+                <Avatar className="h-8 w-8">
+                  <AvatarFallback className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-semibold">
+                    {username?.charAt(0).toUpperCase() ?? "U"}
+                  </AvatarFallback>
+                </Avatar>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem disabled>
+                  <User className="mr-2 h-3.5 w-3.5" />
+                  <span className="text-sm">{username}</span>
+                  {role === "admin" && (
+                    <Shield className="ml-auto h-3 w-3 text-amber-500" />
+                  )}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={logout}>
+                  <LogOut className="mr-2 h-3.5 w-3.5" />
+                  <span className="text-sm">Sign out</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Link href="/login">
+                <Button variant="ghost" size="sm" className="text-sm font-medium">
+                  Sign in
+                </Button>
+              </Link>
+              <Link href="/signup">
+                <Button size="sm" className="bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium">
+                  Sign up
+                </Button>
+              </Link>
+            </div>
+          )}
         </div>
       </div>
     </header>

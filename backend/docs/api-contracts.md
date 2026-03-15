@@ -66,7 +66,7 @@ Authenticate with credentials and return a JWT token.
   "status": "ok",
   "app": "QuantumStock",
   "ollama_connected": true,
-  "ollama_model": "mistral:7b-instruct-v0.3-q5_K_M",
+  "ollama_model": "llama3.2:latest",
   "spacy_loaded": true,
   "spacy_model": "en_core_web_sm"
 }
@@ -195,38 +195,21 @@ Upload 1-8 PDF con-call transcripts. Files are stored in GridFS and text is extr
 
 ### POST /api/concalls/{symbol}/analyze
 
-Run local AI analysis (Ollama + SpaCy) on uploaded con-calls. Analyzes all un-analyzed ones if no IDs provided.
+Queue pending con-calls for analysis. Uses a background worker thread (sequential processing). Returns immediately — frontend polls for status updates.
 
-**Request (optional body):**
-```json
-{
-  "concall_ids": ["665abc...", "665def..."]
-}
-```
+**Query Parameters (optional):**
+- `concall_ids`: List of specific concall IDs to analyze (defaults to all pending)
 
 **Response (200):**
 ```json
 {
   "symbol": "V2RETAIL.NS",
-  "results": [
+  "queued": 3,
+  "concalls": [
     {
       "id": "665abc...",
       "quarter": "Q3FY25",
-      "status": "analyzed",
-      "analysis": {
-        "quarter": "Q3FY25",
-        "highlights": ["Revenue grew 45% YoY to ₹850 Cr", "..."],
-        "tone_score": 8,
-        "guidance": {
-          "revenue_growth": "40-45% for FY25",
-          "store_additions": "50-60 new stores"
-        },
-        "green_flags": ["Margin expansion to 8.5%", "..."],
-        "red_flags": ["Working capital pressure", "..."],
-        "management_execution_score": 7,
-        "key_quotes": ["We are confident of maintaining this growth trajectory"],
-        "error": null
-      }
+      "status": "queued"
     }
   ]
 }
@@ -239,16 +222,13 @@ Run local AI analysis (Ollama + SpaCy) on uploaded con-calls. Analyzes all un-an
 
 ### POST /api/concalls/{symbol}/reanalyze/{concall_id}
 
-Re-run local AI analysis on a specific con-call.
+Re-queue a specific con-call for re-analysis. Resets its status to `queued` and adds to the background worker queue.
 
 **Response (200):**
 ```json
 {
   "id": "665abc...",
-  "quarter": "Q3FY25",
-  "status": "analyzed",
-  "analysis": { ... },
-  "error": null
+  "status": "queued"
 }
 ```
 
@@ -482,6 +462,79 @@ Fetch recent news for a stock. Currently returns mock data.
       "fetched_at": "2025-01-15T12:00:00Z"
     }
   ]
+}
+```
+
+---
+
+## Session Notebook
+
+### GET /api/notes/{symbol}
+
+List all notes for a stock, most recent first. **Public endpoint.**
+
+**Response (200):**
+```json
+[
+  {
+    "_id": "abc123",
+    "stock_symbol": "V2RETAIL.NS",
+    "note_type": "thesis",
+    "content": "Strong buy: 50% revenue growth, 99% PAT growth, expanding footprint to 150 stores/year",
+    "quarter": "Q3FY26",
+    "created_at": "2026-03-15T10:00:00Z",
+    "updated_at": null,
+    "created_by": "chiragp"
+  }
+]
+```
+
+### POST /api/notes/{symbol}
+
+Create a note. **Requires auth.**
+
+**Request:**
+```json
+{
+  "note_type": "thesis",
+  "content": "Why I own this stock...",
+  "quarter": "Q3FY26"
+}
+```
+
+Note types: `thesis`, `observation`, `switch_trigger`, `quarterly_update`
+
+### PUT /api/notes/{symbol}/{note_id}
+
+Update a note's content. **Requires auth.**
+
+**Request:**
+```json
+{
+  "content": "Updated thesis..."
+}
+```
+
+### DELETE /api/notes/{symbol}/{note_id}
+
+Delete a note. **Requires auth.**
+
+---
+
+## Valuation Guidance Pre-fill
+
+### GET /api/valuation/{symbol}/guidance-prefill
+
+Extract growth rate from the latest con-call guidance for valuation auto-fill. **Public endpoint.**
+
+**Response (200):**
+```json
+{
+  "symbol": "V2RETAIL.NS",
+  "suggested_growth": 30.0,
+  "source": "pat_growth",
+  "trajectory": "up",
+  "quarter": "Q3FY26"
 }
 ```
 

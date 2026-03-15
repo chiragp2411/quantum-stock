@@ -11,8 +11,13 @@ def seed_admin() -> None:
     ensure_indexes()
     col = users_col()
 
-    if col.find_one({"username": "chiragp"}):
-        print("Admin user 'chiragp' already exists — skipping seed.")
+    existing = col.find_one({"username": "chiragp"})
+    if existing:
+        if existing.get("role") != "admin":
+            col.update_one({"_id": existing["_id"]}, {"$set": {"role": "admin"}})
+            print("Admin user 'chiragp' updated — role set to 'admin'.")
+        else:
+            print("Admin user 'chiragp' already exists (role=admin) — skipping seed.")
         return
 
     password_hash = bcrypt.hashpw(
@@ -23,10 +28,11 @@ def seed_admin() -> None:
         {
             "username": "chiragp",
             "password_hash": password_hash,
+            "role": "admin",
             "created_at": datetime.now(timezone.utc),
         }
     )
-    print("Admin user 'chiragp' created successfully.")
+    print("Admin user 'chiragp' created (role=admin).")
 
 
 if __name__ == "__main__":

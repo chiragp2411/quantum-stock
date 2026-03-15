@@ -121,10 +121,7 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground text-[15px] leading-relaxed;
-  }
-  html {
-    @apply font-sans;
+    @apply bg-background text-foreground text-[15px] leading-relaxed font-sans;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -138,4 +135,158 @@
   .glass-card {
     @apply backdrop-blur-xl bg-card/80 border border-border/50;
   }
+}
+
+/* Concall Summary — Professional research note styling */
+.concall-summary {
+  font-size: 0.875rem;
+  line-height: 1.7;
+  color: var(--muted-foreground);
+}
+
+.concall-summary h1 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--foreground);
+  margin-top: 0;
+  margin-bottom: 1.25rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  letter-spacing: -0.01em;
+}
+
+.concall-summary h2 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--foreground);
+  margin-top: 1.75rem;
+  margin-bottom: 0.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid color-mix(in oklch, var(--border) 50%, transparent);
+  line-height: 1.4;
+}
+
+.concall-summary h2:first-child,
+.concall-summary h1 + h2 {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+.concall-summary h3 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--foreground);
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+  line-height: 1.4;
+}
+
+.concall-summary p {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+  color: var(--muted-foreground);
+}
+
+.concall-summary strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.concall-summary em {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.concall-summary ul {
+  list-style: none;
+  padding-left: 0;
+  margin-top: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+
+.concall-summary ul li {
+  position: relative;
+  padding-left: 1.25rem;
+  margin-bottom: 0.35rem;
+  color: var(--muted-foreground);
+}
+
+.concall-summary ul li::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  font-weight: 700;
+  color: oklch(0.65 0.2 160);
+}
+
+/* Nested list bullets */
+.concall-summary ul ul {
+  margin-top: 0.2rem;
+  margin-bottom: 0.2rem;
+}
+
+.concall-summary ul ul li::before {
+  content: "–";
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+
+.concall-summary ul ul ul li::before {
+  content: "·";
+  color: var(--muted-foreground);
+}
+
+.concall-summary ol {
+  list-style: none;
+  padding-left: 0;
+  counter-reset: concall-counter;
+  margin-top: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+
+.concall-summary ol li {
+  position: relative;
+  padding-left: 1.75rem;
+  margin-bottom: 0.35rem;
+  counter-increment: concall-counter;
+  color: var(--muted-foreground);
+}
+
+.concall-summary ol li::before {
+  content: counter(concall-counter) ")";
+  position: absolute;
+  left: 0;
+  font-weight: 600;
+  color: oklch(0.6 0.18 250);
+  font-size: 0.8rem;
+}
+
+.concall-summary blockquote {
+  border-left: 2px solid oklch(0.6 0.18 250);
+  padding-left: 1rem;
+  margin: 0.75rem 0;
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.concall-summary hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.5rem 0;
+}
+
+.concall-summary code {
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  padding: 0.15em 0.35em;
+  background: color-mix(in oklch, var(--muted) 60%, transparent);
+  border-radius: 0.25rem;
+  color: var(--foreground);
+}
+
+.concall-summary a {
+  color: oklch(0.65 0.2 160);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }

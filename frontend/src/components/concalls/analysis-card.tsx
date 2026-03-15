@@ -18,6 +18,11 @@ import {
   Loader2,
   RefreshCw,
   Trash2,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  Building2,
+  Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import { AnalysisDrawer } from "./analysis-drawer";
@@ -35,6 +40,26 @@ interface Analysis {
   lynch_category?: string;
   confidence?: number;
   error?: string | null;
+  business_model?: string | null;
+  moat_signals?: string[];
+  competitive_advantages?: string[];
+  revenue_cr?: number | null;
+  ebitda_cr?: number | null;
+  pat_cr?: number | null;
+  ebitda_margin_pct?: number | null;
+  pat_margin_pct?: number | null;
+  revenue_growth_yoy_pct?: number | null;
+  pat_growth_yoy_pct?: number | null;
+  guidance_trajectory?: string | null;
+  guidance_trajectory_detail?: string | null;
+  contradictions?: string[];
+  capex_plans?: string[];
+  capacity_utilization?: string | null;
+  geographic_expansion?: string[];
+  investment_thesis?: string[];
+  sector_best_pick_rationale?: string | null;
+  analysis_provider?: string | null;
+  prev_guidance_comparison?: Record<string, Record<string, unknown>> | null;
 }
 
 interface AnalysisCardProps {
@@ -178,23 +203,31 @@ export function AnalysisCard({ symbol, concall, onReanalyzed, onDelete }: Analys
             </div>
           </div>
           <p className="text-sm text-red-400/80 mt-2">
-            {analysis.error || "Analysis returned empty results. Ensure Ollama is running and the PDF has parseable text."}
+            {analysis.error || "Analysis returned empty results. Check backend logs."}
           </p>
         </CardHeader>
       </Card>
     );
   }
 
+  const trajectory = analysis.guidance_trajectory;
+  const hasThesis = analysis.investment_thesis && analysis.investment_thesis.length > 0;
+
   return (
     <>
       <Card
-        className="border-border/40 transition-all duration-200 hover:border-border/60 cursor-pointer"
+        className="border-border/40 transition-all duration-200 hover:border-border/60 hover:shadow-sm cursor-pointer group"
         onClick={() => setDrawerOpen(true)}
       >
         <CardHeader className="py-4 sm:py-5">
+          {/* Row 1: Quarter, scores, badges, actions */}
           <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-4 min-w-0">
+            <div className="flex items-center gap-3 min-w-0">
               <span className="text-sm font-bold whitespace-nowrap">{displayLabel}</span>
+
+              {trajectory && (
+                <TrajectoryIndicator trajectory={trajectory} />
+              )}
 
               <div className="hidden sm:flex items-center gap-3">
                 <ScoreGauge label="Tone" value={analysis.tone_score} color="blue" tooltip={TOOLTIPS.toneScore} />
@@ -209,6 +242,15 @@ export function AnalysisCard({ symbol, concall, onReanalyzed, onDelete }: Analys
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
+              {analysis.analysis_provider === "gemini" && (
+                <Tooltip>
+                  <TooltipTrigger>
+                    <Sparkles className="h-3.5 w-3.5 text-blue-400" />
+                  </TooltipTrigger>
+                  <TooltipContent>Analyzed by Gemini</TooltipContent>
+                </Tooltip>
+              )}
+
               <div className="hidden sm:flex items-center gap-1.5">
                 <Badge variant="outline" className="text-[10px] px-2 py-0 bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
                   {analysis.green_flags.length} green
@@ -230,10 +272,36 @@ export function AnalysisCard({ symbol, concall, onReanalyzed, onDelete }: Analys
                   <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
                 )}
               </Button>
-              <ExternalLink className="h-3.5 w-3.5 text-muted-foreground/50" />
+              <ExternalLink className="h-3.5 w-3.5 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
             </div>
           </div>
 
+          {/* Row 2: Financial KPIs inline (only for Gemini-analyzed) */}
+          {(analysis.revenue_cr != null || analysis.pat_cr != null || analysis.pat_growth_yoy_pct != null) && (
+            <div className="flex items-center gap-4 mt-2.5 text-xs text-muted-foreground">
+              {analysis.revenue_cr != null && (
+                <KpiChip label="Rev" value={`₹${analysis.revenue_cr.toLocaleString("en-IN")} cr`} growth={analysis.revenue_growth_yoy_pct} />
+              )}
+              {analysis.pat_cr != null && (
+                <KpiChip label="PAT" value={`₹${analysis.pat_cr.toLocaleString("en-IN")} cr`} growth={analysis.pat_growth_yoy_pct} />
+              )}
+              {analysis.ebitda_margin_pct != null && (
+                <KpiChip label="EBITDA Margin" value={`${analysis.ebitda_margin_pct}%`} />
+              )}
+              {analysis.pat_margin_pct != null && (
+                <KpiChip label="PAT Margin" value={`${analysis.pat_margin_pct}%`} />
+              )}
+            </div>
+          )}
+
+          {/* Row 3: First thesis bullet preview */}
+          {hasThesis && (
+            <p className="text-xs text-muted-foreground/70 mt-2 line-clamp-1 italic">
+              {analysis.investment_thesis![0]}
+            </p>
+          )}
+
+          {/* Mobile scores */}
           <div className="flex sm:hidden items-center gap-3 mt-3">
             <ScoreGauge label="Tone" value={analysis.tone_score} color="blue" tooltip={TOOLTIPS.toneScore} />
             <ScoreGauge label="Exec" value={analysis.management_execution_score} color="emerald" tooltip={TOOLTIPS.executionScore} />
@@ -257,6 +325,54 @@ export function AnalysisCard({ symbol, concall, onReanalyzed, onDelete }: Analys
         filename={concall.pdf_filename}
       />
     </>
+  );
+}
+
+function TrajectoryIndicator({ trajectory }: { trajectory: string }) {
+  const config: Record<string, { icon: React.ReactNode; className: string; tip: string }> = {
+    up: {
+      icon: <TrendingUp className="h-3.5 w-3.5" />,
+      className: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
+      tip: "Guidance trajectory: Upward — management raising estimates",
+    },
+    down: {
+      icon: <TrendingDown className="h-3.5 w-3.5" />,
+      className: "text-red-400 bg-red-500/10 border-red-500/20",
+      tip: "Guidance trajectory: Downward — guidance being cut",
+    },
+    flat: {
+      icon: <Minus className="h-3.5 w-3.5" />,
+      className: "text-zinc-400 bg-zinc-500/10 border-zinc-500/20",
+      tip: "Guidance trajectory: Flat — maintained guidance",
+    },
+  };
+  const c = config[trajectory] ?? config.flat;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger>
+        <Badge variant="outline" className={`gap-1 text-[10px] ${c.className}`}>
+          {c.icon}
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">
+        <p>{c.tip}</p>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function KpiChip({ label, value, growth }: { label: string; value: string; growth?: number | null }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="text-muted-foreground/60">{label}:</span>
+      <span className="font-semibold text-foreground tabular-nums">{value}</span>
+      {growth != null && (
+        <span className={`font-semibold tabular-nums ${growth >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+          ({growth >= 0 ? "+" : ""}{growth}%)
+        </span>
+      )}
+    </span>
   );
 }
 

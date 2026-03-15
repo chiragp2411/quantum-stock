@@ -4,7 +4,6 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import api from "@/lib/api";
 import { Header } from "@/components/layout/header";
-import { AuthGuard } from "@/components/layout/auth-guard";
 import { ScenarioPanel } from "@/components/valuation/scenario-panel";
 import { PhaseSpeedometer } from "@/components/valuation/phase-speedometer";
 import { SensitivitySlider } from "@/components/valuation/sensitivity-slider";
@@ -22,7 +21,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Calculator, ChevronRight, HelpCircle, Loader2, Settings2 } from "lucide-react";
+import { Calculator, ChevronRight, HelpCircle, Loader2, Settings2, Sparkles, TrendingUp, TrendingDown, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 
 interface Scenario {
@@ -65,17 +64,26 @@ export default function ValuationPage() {
   const [bearDelta, setBearDelta] = useState(10);
   const [manualEps, setManualEps] = useState("");
   const [manualPrice, setManualPrice] = useState("");
+  const [guidancePrefill, setGuidancePrefill] = useState<{
+    suggested_growth: number | null;
+    source: string | null;
+    trajectory: string | null;
+    quarter: string | null;
+  } | null>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasCalculated = useRef(false);
 
   useEffect(() => {
+    let cancelled = false;
     const loadInitial = async () => {
       try {
-        const [latestRes, stockRes] = await Promise.allSettled([
+        const [latestRes, stockRes, prefillRes] = await Promise.allSettled([
           api.get(`/api/valuation/${encodeURIComponent(symbol)}/latest`),
           api.get(`/api/stocks/${encodeURIComponent(symbol)}/summary`),
+          api.get(`/api/valuation/${encodeURIComponent(symbol)}/guidance-prefill`),
         ]);
+        if (cancelled) return;
 
         if (latestRes.status === "fulfilled" && latestRes.value.data.scenarios) {
           const scenarios = latestRes.value.data.scenarios;
@@ -84,7 +92,13 @@ export default function ValuationPage() {
           hasCalculated.current = true;
         }
 
-        if (
+        if (prefillRes.status === "fulfilled" && prefillRes.value.data.suggested_growth) {
+          setGuidancePrefill(prefillRes.value.data);
+          if (!hasCalculated.current) {
+            const g = Math.round(prefillRes.value.data.suggested_growth);
+            if (g > 0 && g <= 200) setGrowthRate(g);
+          }
+        } else if (
           stockRes.status === "fulfilled" &&
           stockRes.value.data.eps_growth &&
           !hasCalculated.current
@@ -95,10 +109,11 @@ export default function ValuationPage() {
       } catch {
         /* nothing to load yet */
       } finally {
-        setInitialLoading(false);
+        if (!cancelled) setInitialLoading(false);
       }
     };
     loadInitial();
+    return () => { cancelled = true; };
   }, [symbol]);
 
   const calculate = useCallback(
@@ -145,7 +160,7 @@ export default function ValuationPage() {
   }, [growthRate, bullDelta, bearDelta, calculate, initialLoading]);
 
   return (
-    <AuthGuard>
+    <>
       <Header />
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
         {/* Breadcrumb */}
@@ -171,7 +186,7 @@ export default function ValuationPage() {
               Forward Valuation — {cleanSymbol}
             </h2>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Run scenario analysis to find out which phase of the race your stock is in
+              PEG-based valuation with growth from con-call guidance. PEG &lt; 1 = undervalued, PEG &gt; 1.5 = expensive.
             </p>
           </div>
         </div>
@@ -205,6 +220,31 @@ export default function ValuationPage() {
                 </Card>
               )}
             </div>
+
+            {/* Guidance auto-fill hint */}
+            {guidancePrefill?.suggested_growth != null && (
+              <div className="mb-4 rounded-xl border border-emerald-500/15 bg-emerald-500/5 px-4 py-3 flex items-center gap-3">
+                <Sparkles className="h-4 w-4 text-emerald-400 shrink-0" />
+                <div className="flex-1 text-sm">
+                  <span className="text-muted-foreground">Growth rate auto-filled from </span>
+                  <span className="font-medium text-foreground">{guidancePrefill.quarter}</span>
+                  <span className="text-muted-foreground"> con-call guidance ({guidancePrefill.source?.replace(/_/g, " ")}): </span>
+                  <span className="font-semibold text-emerald-400">{guidancePrefill.suggested_growth}%</span>
+                  {guidancePrefill.trajectory && (
+                    <span className="ml-2 inline-flex items-center gap-1">
+                      {guidancePrefill.trajectory === "up" && <TrendingUp className="h-3 w-3 text-emerald-400" />}
+                      {guidancePrefill.trajectory === "down" && <TrendingDown className="h-3 w-3 text-red-400" />}
+                      {guidancePrefill.trajectory === "flat" && <ArrowRight className="h-3 w-3 text-muted-foreground" />}
+                      <span className={`text-xs font-medium ${
+                        guidancePrefill.trajectory === "up" ? "text-emerald-400" : guidancePrefill.trajectory === "down" ? "text-red-400" : "text-muted-foreground"
+                      }`}>
+                        {guidancePrefill.trajectory.charAt(0).toUpperCase() + guidancePrefill.trajectory.slice(1)} trajectory
+                      </span>
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Controls */}
             <div className="grid gap-6 lg:grid-cols-2 mb-8">
@@ -286,7 +326,12 @@ export default function ValuationPage() {
             {/* Scenario results */}
             {result && (
               <div className="space-y-5">
-                <h3 className="text-lg font-semibold">Scenario Analysis</h3>
+                <div>
+                  <h3 className="text-lg font-semibold">Scenario Analysis</h3>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Three scenarios based on management guidance. Fair Value = EPS &times; Growth Rate (Lynch formula). PEG &lt; 1 is Phase 1 (Bargain), PEG &gt; 1.5 with low growth is Phase 3 (Trap).
+                  </p>
+                </div>
                 <ScenarioPanel
                   base={result.base}
                   bull={result.bull}
@@ -298,6 +343,6 @@ export default function ValuationPage() {
           </>
         )}
       </main>
-    </AuthGuard>
+    </>
   );
 }

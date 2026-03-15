@@ -24,12 +24,15 @@ def signup(body: UserCreate):
         {
             "username": body.username,
             "password_hash": hash_password(body.password),
+            "role": "user",
             "created_at": datetime.now(timezone.utc),
         }
     )
 
     return TokenResponse(
-        access_token=create_token(body.username), username=body.username
+        access_token=create_token(body.username, role="user"),
+        username=body.username,
+        role="user",
     )
 
 
@@ -42,6 +45,9 @@ def login(body: UserLogin):
             detail="Invalid username or password",
         )
 
+    role = user.get("role", "user")
     return TokenResponse(
-        access_token=create_token(body.username), username=body.username
+        access_token=create_token(body.username, role=role),
+        username=body.username,
+        role=role,
     )

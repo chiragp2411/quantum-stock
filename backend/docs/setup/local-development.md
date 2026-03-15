@@ -33,18 +33,18 @@ uv run python -m spacy download en_core_web_sm
 ### Pull the Ollama model
 
 ```bash
-ollama pull mistral:7b-instruct-v0.3-q5_K_M
+ollama pull llama3.2:latest
 ```
 
 ### Configure environment
 
-Create `backend/.env`:
+The backend reads `.env` from `backend/.env` if present, otherwise from the project root `.env`. Copy the example:
 
 ```bash
-cp .env.example .env
+cp ../.env.example ../.env
 ```
 
-Edit `backend/.env` and set at minimum:
+Edit `.env` and set at minimum:
 
 ```env
 ADMIN_PASS=your-admin-password
@@ -57,7 +57,7 @@ Full list of environment variables:
 |----------|---------|----------|-------------|
 | `MONGO_URI` | `mongodb://localhost:27017` | No | MongoDB connection string |
 | `DB_NAME` | `quantumstock` | No | Database name |
-| `OLLAMA_MODEL` | `mistral:7b-instruct-v0.3-q5_K_M` | No | Ollama model for con-call analysis |
+| `OLLAMA_MODEL` | `llama3.2:latest` | No | Ollama model for summary generation |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | No | Ollama server URL |
 | `SPACY_MODEL` | `en_core_web_sm` | No | SpaCy NLP model for entity extraction |
 | `JWT_SECRET` | (auto-generated) | Recommended | JWT signing secret. Set this to persist sessions across restarts |
@@ -94,7 +94,7 @@ Expected response:
   "status": "ok",
   "app": "QuantumStock",
   "ollama_connected": true,
-  "ollama_model": "mistral:7b-instruct-v0.3-q5_K_M",
+  "ollama_model": "llama3.2:latest",
   "spacy_loaded": true,
   "spacy_model": "en_core_web_sm"
 }
@@ -167,9 +167,9 @@ uv run uvicorn app.main:app --reload --port 9000
 
 ### Con-call analysis fails or shows "Unknown"
 - Ensure Ollama is running: `ollama list` should show available models
-- Ensure the model is pulled: `ollama pull mistral:7b-instruct-v0.3-q5_K_M`
+- Ensure the model is pulled: `ollama pull llama3.2:latest`
 - Check backend logs for connection errors or missing key warnings
-- Each concall takes 1-3 minutes on CPU — be patient
+- SpaCy extraction is instant (<2s); Ollama summary takes ~25s per concall
 
 ### SpaCy model not found
 - Run: `uv pip install pip && uv run python -m spacy download en_core_web_sm`

@@ -12,9 +12,9 @@ import {
   Filler,
 } from "chart.js";
 import { Line } from "react-chartjs-2";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useChartTheme } from "@/hooks/use-chart-theme";
-import { TrendingUp } from "lucide-react";
+import { TrendingUp, TrendingDown, ArrowRight } from "lucide-react";
 
 ChartJS.register(
   CategoryScale,
@@ -32,6 +32,7 @@ interface ConcallAnalysis {
   analysis: {
     tone_score: number;
     management_execution_score: number;
+    guidance_trajectory?: string | null;
   } | null;
 }
 
@@ -46,11 +47,14 @@ export function GuidanceTrendChart({ concalls }: GuidanceTrendChartProps) {
   if (analyzed.length < 2) {
     return (
       <Card className="border-border/40">
-        <CardHeader>
+        <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-base">
-            <TrendingUp className="h-4 w-4 text-muted-foreground" />
-            Guidance Trend
+            <TrendingUp className="h-4 w-4 text-emerald-500" />
+            Management Confidence & Execution
           </CardTitle>
+          <CardDescription className="text-xs">
+            How management tone and delivery evolve quarter over quarter
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex flex-col items-center justify-center py-12">
@@ -69,7 +73,7 @@ export function GuidanceTrendChart({ concalls }: GuidanceTrendChartProps) {
 
   const lastTone = toneData[toneData.length - 1];
   const prevTone = toneData[toneData.length - 2];
-  const trendUp = lastTone >= prevTone;
+  const trendDirection = lastTone > prevTone ? "up" : lastTone < prevTone ? "down" : "flat";
 
   const data = {
     labels,
@@ -77,26 +81,26 @@ export function GuidanceTrendChart({ concalls }: GuidanceTrendChartProps) {
       {
         label: "Tone Score",
         data: toneData,
-        borderColor: trendUp ? "rgba(52, 211, 153, 0.9)" : "rgba(248, 113, 113, 0.9)",
-        backgroundColor: trendUp ? "rgba(52, 211, 153, 0.08)" : "rgba(248, 113, 113, 0.08)",
+        borderColor: trendDirection === "up" ? "rgba(52, 211, 153, 0.9)" : trendDirection === "down" ? "rgba(248, 113, 113, 0.9)" : "rgba(148, 163, 184, 0.9)",
+        backgroundColor: trendDirection === "up" ? "rgba(52, 211, 153, 0.06)" : trendDirection === "down" ? "rgba(248, 113, 113, 0.06)" : "rgba(148, 163, 184, 0.06)",
         fill: true,
-        tension: 0.4,
-        pointRadius: 4,
-        pointHoverRadius: 6,
-        pointBackgroundColor: trendUp ? "rgb(52, 211, 153)" : "rgb(248, 113, 113)",
-        borderWidth: 2,
+        tension: 0.35,
+        pointRadius: 5,
+        pointHoverRadius: 7,
+        pointBackgroundColor: trendDirection === "up" ? "rgb(52, 211, 153)" : trendDirection === "down" ? "rgb(248, 113, 113)" : "rgb(148, 163, 184)",
+        borderWidth: 2.5,
       },
       {
         label: "Execution Score",
         data: execData,
         borderColor: "rgba(96, 165, 250, 0.9)",
-        backgroundColor: "rgba(96, 165, 250, 0.08)",
+        backgroundColor: "rgba(96, 165, 250, 0.06)",
         fill: true,
-        tension: 0.4,
-        pointRadius: 4,
-        pointHoverRadius: 6,
+        tension: 0.35,
+        pointRadius: 5,
+        pointHoverRadius: 7,
         pointBackgroundColor: "rgb(96, 165, 250)",
-        borderWidth: 2,
+        borderWidth: 2.5,
       },
     ],
   };
@@ -110,25 +114,25 @@ export function GuidanceTrendChart({ concalls }: GuidanceTrendChartProps) {
         min: 0,
         max: 10,
         grid: { color: gridColor, drawBorder: false },
-        ticks: { color: tickColor, stepSize: 2 },
+        ticks: { color: tickColor, stepSize: 2, font: { size: 11 } },
         border: { display: false },
       },
       x: {
         grid: { display: false },
-        ticks: { color: tickColor },
+        ticks: { color: tickColor, font: { size: 11 } },
         border: { display: false },
       },
     },
     plugins: {
       legend: {
         position: "bottom" as const,
-        labels: { color: legendColor, usePointStyle: true, pointStyle: "circle", padding: 16, font: { size: 11 } },
+        labels: { color: legendColor, usePointStyle: true, pointStyle: "circle", padding: 20, font: { size: 11 } },
       },
       tooltip: {
-        backgroundColor: "rgba(0,0,0,0.8)",
-        padding: 10,
+        backgroundColor: "rgba(0,0,0,0.85)",
+        padding: 12,
         cornerRadius: 8,
-        titleFont: { size: 12 },
+        titleFont: { size: 12, weight: "bold" as const },
         bodyFont: { size: 12 },
       },
     },
@@ -136,11 +140,26 @@ export function GuidanceTrendChart({ concalls }: GuidanceTrendChartProps) {
 
   return (
     <Card className="border-border/40">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <TrendingUp className="h-4 w-4 text-muted-foreground" />
-          Guidance Trend
-        </CardTitle>
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              {trendDirection === "up" && <TrendingUp className="h-4 w-4 text-emerald-500" />}
+              {trendDirection === "down" && <TrendingDown className="h-4 w-4 text-red-400" />}
+              {trendDirection === "flat" && <ArrowRight className="h-4 w-4 text-muted-foreground" />}
+              Management Confidence & Execution
+            </CardTitle>
+            <CardDescription className="text-xs mt-0.5">
+              Tone: how openly management shares data &middot; Execution: how well they deliver on promises
+            </CardDescription>
+          </div>
+          <div className="text-right">
+            <div className={`text-lg font-bold tabular-nums ${lastTone >= 7 ? "text-emerald-500" : lastTone >= 4 ? "text-blue-400" : "text-red-400"}`}>
+              {lastTone}/10
+            </div>
+            <div className="text-[10px] text-muted-foreground">Latest Tone</div>
+          </div>
+        </div>
       </CardHeader>
       <CardContent>
         <div className="h-72">

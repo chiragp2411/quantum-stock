@@ -21,7 +21,7 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && typeof window !== "undefined") {
       localStorage.removeItem("qs_token");
       localStorage.removeItem("qs_username");
-      window.location.href = "/";
+      localStorage.removeItem("qs_role");
     }
     return Promise.reject(error);
   }

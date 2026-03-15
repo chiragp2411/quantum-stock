@@ -11,6 +11,7 @@ from bson import ObjectId
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
 from app.auth.utils import get_current_user
+from app.config import settings
 from app.database import concalls_col, financials_col, get_gridfs
 from app.concalls.models import ConCallAnalysis, GuidanceRow, ManualOverride
 from app.concalls.pdf_parser import extract_text_from_pdf
@@ -33,6 +34,35 @@ def _doc_to_dict(doc: dict) -> dict:
     return doc
 
 
+def _get_prev_analysis_json(symbol: str, current_doc_id: ObjectId) -> Optional[str]:
+    """Get the previous quarter's analysis JSON for cross-quarter comparison."""
+    import json
+
+    col = concalls_col()
+    prev_docs = list(
+        col.find({
+            "stock_symbol": symbol,
+            "status": "completed",
+            "analysis": {"$ne": None},
+            "_id": {"$ne": current_doc_id},
+        })
+        .sort("uploaded_at", -1)
+        .limit(1)
+    )
+    if prev_docs and prev_docs[0].get("analysis"):
+        prev = prev_docs[0]["analysis"]
+        subset = {
+            "quarter": prev.get("quarter"),
+            "guidance": prev.get("guidance", {}),
+            "tone_score": prev.get("tone_score"),
+            "highlights": prev.get("highlights", [])[:5],
+            "guidance_trajectory": prev.get("guidance_trajectory"),
+            "investment_thesis": prev.get("investment_thesis", []),
+        }
+        return json.dumps(subset, default=str)
+    return None
+
+
 def _analyze_single_concall(doc_id: ObjectId, symbol: str) -> None:
     """Analyze a single concall. Updates DB status through lifecycle."""
     col = concalls_col()
@@ -46,9 +76,23 @@ def _analyze_single_concall(doc_id: ObjectId, symbol: str) -> None:
     )
 
     try:
-        analysis = analyze_concall(
-            doc["raw_text"], quarter_hint=doc.get("quarter", "")
-        )
+        provider = settings.analysis_provider.lower()
+
+        if provider == "gemini" and settings.gemini_api_key:
+            from app.concalls.gemini_analyzer import analyze_concall_gemini
+
+            prev_json = _get_prev_analysis_json(symbol, doc_id)
+            analysis = analyze_concall_gemini(
+                text=doc["raw_text"],
+                quarter_hint=doc.get("quarter", ""),
+                prev_analysis_json=prev_json,
+                symbol=symbol,
+            )
+        else:
+            analysis = analyze_concall(
+                doc["raw_text"], quarter_hint=doc.get("quarter", "")
+            )
+
         analysis_dict = analysis.model_dump()
         new_status = "failed" if analysis.error else "completed"
 
@@ -63,7 +107,7 @@ def _analyze_single_concall(doc_id: ObjectId, symbol: str) -> None:
                 }
             },
         )
-        logger.info("Concall %s: %s (quarter=%s)", doc_id, new_status, analysis.quarter)
+        logger.info("Concall %s: %s (quarter=%s, provider=%s)", doc_id, new_status, analysis.quarter, provider)
     except Exception as exc:
         logger.exception("Analysis failed for concall %s", doc_id)
         col.update_one(
@@ -296,21 +340,15 @@ def delete_concall(
 
 
 @router.get("/{symbol}")
-def list_concalls(
-    symbol: str,
-    _user: dict = Depends(get_current_user),
-):
-    """List all con-calls for a stock, ordered by quarter."""
+def list_concalls(symbol: str):
+    """List all con-calls for a stock, ordered by quarter. Public endpoint."""
     symbol = symbol.upper()
     docs = concalls_col().find({"stock_symbol": symbol}).sort("uploaded_at", 1)
     return [_doc_to_dict(d) for d in docs]
 
 
 @router.get("/{symbol}/tracker")
-def guidance_tracker(
-    symbol: str,
-    _user: dict = Depends(get_current_user),
-):
+def guidance_tracker(symbol: str):
     """Build the guidance tracker: prev guidance vs actuals for each quarter."""
     symbol = symbol.upper()
     concalls = list(
@@ -360,6 +398,13 @@ def guidance_tracker(
         trajectory = _determine_trajectory(rows, analysis)
         current_tone = analysis.get("tone_score", 5)
 
+        gemini_contradictions = analysis.get("contradictions", [])
+        gemini_trajectory = analysis.get("guidance_trajectory")
+        surprise = analysis.get("guidance_trajectory_detail", "")
+
+        if gemini_trajectory:
+            trajectory = gemini_trajectory
+
         rows.append(
             GuidanceRow(
                 period=quarter,
@@ -369,10 +414,20 @@ def guidance_tracker(
                 met_missed=met_missed,
                 new_guidance=analysis.get("guidance", {}),
                 trajectory=trajectory,
+                surprise=surprise if surprise else None,
+                contradictions=gemini_contradictions,
             ).model_dump()
         )
 
-    return {"symbol": symbol, "tracker": rows}
+    credibility = _calc_credibility(rows)
+    financials_ts = _build_financial_timeseries(concalls)
+
+    return {
+        "symbol": symbol,
+        "tracker": rows,
+        "credibility": credibility,
+        "financial_timeseries": financials_ts,
+    }
 
 
 @router.put("/{symbol}/{concall_id}/override")
@@ -457,3 +512,46 @@ def _determine_trajectory(prev_rows: list[dict], current_analysis: dict) -> str:
     elif current_tone < prev_tone:
         return "down"
     return "flat"
+
+
+def _calc_credibility(rows: list[dict]) -> dict:
+    """Calculate management credibility from guidance hit-rate."""
+    total = 0
+    met = 0
+    for row in rows:
+        status = row.get("met_missed", "pending")
+        if status in ("met", "missed", "partial"):
+            total += 1
+            if status == "met":
+                met += 1
+            elif status == "partial":
+                met += 0.5
+
+    pct = round((met / total) * 100) if total > 0 else None
+    return {
+        "hit_rate_pct": pct,
+        "quarters_tracked": total,
+        "quarters_met": int(met),
+    }
+
+
+def _build_financial_timeseries(concalls: list[dict]) -> list[dict]:
+    """Extract quarter-over-quarter financial KPIs from analyzed concalls."""
+    ts = []
+    for cc in concalls:
+        analysis = cc.get("analysis", {})
+        if not analysis:
+            continue
+        quarter = analysis.get("quarter", cc.get("quarter", ""))
+        entry: dict = {"quarter": quarter}
+        for field in (
+            "revenue_cr", "ebitda_cr", "pat_cr",
+            "ebitda_margin_pct", "pat_margin_pct",
+            "revenue_growth_yoy_pct", "pat_growth_yoy_pct",
+            "tone_score", "management_execution_score",
+        ):
+            val = analysis.get(field)
+            if val is not None:
+                entry[field] = val
+        ts.append(entry)
+    return ts

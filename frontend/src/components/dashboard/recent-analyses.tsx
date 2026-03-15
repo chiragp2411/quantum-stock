@@ -38,11 +38,13 @@ export function RecentAnalyses() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let cancelled = false;
     api
       .get("/api/stocks/recent")
-      .then((res) => setStocks(res.data))
+      .then((res) => { if (!cancelled) setStocks(res.data); })
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, []);
 
   if (loading) {

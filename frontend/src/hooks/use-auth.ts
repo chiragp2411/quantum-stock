@@ -7,16 +7,18 @@ import api from "@/lib/api";
 interface AuthState {
   token: string | null;
   username: string | null;
+  role: string | null;
   isAuthenticated: boolean;
 }
 
 function getStoredAuth(): AuthState {
   if (typeof window === "undefined") {
-    return { token: null, username: null, isAuthenticated: false };
+    return { token: null, username: null, role: null, isAuthenticated: false };
   }
   const token = localStorage.getItem("qs_token");
   const username = localStorage.getItem("qs_username");
-  return { token, username, isAuthenticated: !!token };
+  const role = localStorage.getItem("qs_role");
+  return { token, username, role, isAuthenticated: !!token };
 }
 
 export function useAuth() {
@@ -24,6 +26,7 @@ export function useAuth() {
   const [auth, setAuth] = useState<AuthState>({
     token: null,
     username: null,
+    role: null,
     isAuthenticated: false,
   });
   const [loading, setLoading] = useState(true);
@@ -36,10 +39,11 @@ export function useAuth() {
   const login = useCallback(
     async (username: string, password: string) => {
       const res = await api.post("/api/auth/login", { username, password });
-      const { access_token, username: uname } = res.data;
+      const { access_token, username: uname, role } = res.data;
       localStorage.setItem("qs_token", access_token);
       localStorage.setItem("qs_username", uname);
-      setAuth({ token: access_token, username: uname, isAuthenticated: true });
+      localStorage.setItem("qs_role", role ?? "user");
+      setAuth({ token: access_token, username: uname, role: role ?? "user", isAuthenticated: true });
       router.push("/dashboard");
     },
     [router]
@@ -48,10 +52,11 @@ export function useAuth() {
   const signup = useCallback(
     async (username: string, password: string) => {
       const res = await api.post("/api/auth/signup", { username, password });
-      const { access_token, username: uname } = res.data;
+      const { access_token, username: uname, role } = res.data;
       localStorage.setItem("qs_token", access_token);
       localStorage.setItem("qs_username", uname);
-      setAuth({ token: access_token, username: uname, isAuthenticated: true });
+      localStorage.setItem("qs_role", role ?? "user");
+      setAuth({ token: access_token, username: uname, role: role ?? "user", isAuthenticated: true });
       router.push("/dashboard");
     },
     [router]
@@ -60,7 +65,8 @@ export function useAuth() {
   const logout = useCallback(() => {
     localStorage.removeItem("qs_token");
     localStorage.removeItem("qs_username");
-    setAuth({ token: null, username: null, isAuthenticated: false });
+    localStorage.removeItem("qs_role");
+    setAuth({ token: null, username: null, role: null, isAuthenticated: false });
     router.push("/");
   }, [router]);
 

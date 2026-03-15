@@ -2,111 +2,117 @@
 
 ## Overview
 
-The valuation feature implements Peter Lynch's approach to stock valuation using a 4-phase matrix based on PEG ratio and growth rate. Users can run base/bull/bear scenario analysis with adjustable growth rates to determine which "phase of the race" a stock is in.
+The valuation feature implements a forward-looking, PEG-based valuation with a 4-phase matrix. Growth rates are auto-filled from con-call guidance when available, making the valuation directly tied to management's own projections.
 
-## The 4-Phase Valuation Matrix
+## The 4-Phase Valuation Matrix (Car Race Analogy)
 
-Inspired by Lynch's framework, stocks are classified into one of four phases based on their PEG ratio and growth rate:
+Every stock is classified into one of four phases based on PEG ratio and growth:
 
-```
-                    High Growth (≥15%)          Low Growth (<10%)
-                ┌─────────────────────────┬─────────────────────────┐
-Low PE/Growth   │  Phase 1: BARGAIN       │  Phase 4: TURNAROUND    │
-(PEG ≤ 1.0)    │  "Pole Position"        │  "Back on Track"        │
-                │  Action: Buy/Add        │  Action: Watch closely  │
-                ├─────────────────────────┼─────────────────────────┤
-High PE/Growth  │  Phase 2: MOMENTUM      │  Phase 3: TRAP          │
-(PEG > 1.5)    │  "Leading the Pack"     │  "Pit Stop Needed"      │
-                │  Action: Hold/Monitor   │  Action: Exit           │
-                └─────────────────────────┴─────────────────────────┘
-```
+| Phase | PEG | Growth | Race Analogy | Action |
+|-------|-----|--------|--------------|--------|
+| Phase 1: Bargain | ≤ 1.0 | ≥ 15% | Pole Position | Buy / Add heavily |
+| Phase 2: Momentum | > 1.5 | ≥ 15% | Leading the Pack | Hold, watch closely |
+| Phase 3: Trap | > 1.5 | < 10% | Pit Stop Needed | Exit fast |
+| Phase 4: Turnaround | ≤ 1.0 | < 10% | Back on Track | Track for Phase 1 shift |
 
 ### Phase Determination Logic
 
 ```python
-def determine_phase(peg, growth):
-    if peg <= 1.0 and growth >= 15:  return Phase 1  # Bargain
-    if peg > 1.5 and growth >= 15:   return Phase 2  # Momentum
-    if peg > 1.5 and growth < 10:    return Phase 3  # Trap
-    if peg <= 1.0 and growth < 10:   return Phase 4  # Turnaround
-    # Edge cases (PEG 1.0-1.5 or growth 10-15%)
-    if growth >= 15:  return Phase 2
-    if peg <= 1.0:    return Phase 4
-    return Phase 3
+if peg <= 1.0 and growth >= 15:  Phase 1 (Bargain)
+if peg > 1.5 and growth >= 15:   Phase 2 (Momentum)
+if peg > 1.5 and growth < 10:    Phase 3 (Trap)
+if peg <= 1.0 and growth < 10:   Phase 4 (Turnaround)
+# Edge cases (PEG 1.0-1.5 or growth 10-15%)
+if growth >= 15:  return Phase 2
+if peg <= 1.0:    return Phase 4
+return Phase 3
 ```
 
-**Files:** `app/valuation/calculator.py` → `determine_phase()`
+## Key Formulas
 
-## Scenario Calculations
+| Metric | Formula |
+|--------|---------|
+| Forward EPS | Current EPS × (1 + growth_rate / 100) |
+| Forward PAT | Forward EPS × Shares Outstanding |
+| Forward P/E | Current Price / Forward EPS |
+| PEG | Forward P/E / Growth Rate |
+| Fair Value | Current EPS × Growth Rate |
+| Upside % | (Fair Value - CMP) / CMP × 100 |
 
-### Formulas
+## Guidance Auto-Fill (Con-Call Integration)
 
-For each scenario (Base, Bull, Bear):
+### How "Latest Concall" Is Determined
 
-| Metric | Formula | Description |
-|--------|---------|-------------|
-| **Forward EPS** | `Current EPS × (1 + growth_rate/100)` | Projected next-year EPS |
-| **Forward PAT** | `Forward EPS × shares_outstanding` | Projected profit after tax |
-| **Forward PE** | `Current Price / Forward EPS` | What PE would be at forward earnings |
-| **PEG** | `Forward PE / growth_rate` | Price-to-earnings-growth ratio |
-| **Fair Value** | `Current EPS × growth_rate` | Lynch's rule: PE should equal growth rate |
-| **Upside %** | `(Fair Value - CMP) / CMP × 100` | Potential gain/loss from current price |
+The system finds the latest concall by **fiscal quarter** (not upload date), so uploading concalls in any order works correctly:
 
-### Scenario Deltas
+1. Fetches all completed concalls for the stock (up to 20)
+2. Parses the `quarter` field (e.g., "Q3FY26" → sort key "2026-3")
+3. Sorts by fiscal quarter descending
+4. Uses the most recent quarter's guidance
 
-- **Base case:** Uses the user-specified growth rate directly
-- **Bull case:** `growth_rate + bull_delta` (default: +10%)
-- **Bear case:** `max(growth_rate - bear_delta, 0.01)` (default: -10%, floored at 0.01%)
+### What Forward Data Is Extracted
 
-**Files:** `app/valuation/calculator.py` → `calculate_scenario()`, `calculate_valuation()`
+The system looks for these fields in priority order from `analysis.guidance`:
 
-## Car Race Analogy
+1. `pat_growth` or `pat_growth_pct` — PAT growth guidance (preferred)
+2. `pat` — Absolute PAT guidance
+3. `earnings_growth` — Earnings growth guidance
+4. `revenue_growth` — Revenue growth guidance
+5. **Fallback**: `pat_growth_yoy_pct` — Historically extracted actual PAT growth
 
-The UI uses racing metaphors to make financial concepts accessible:
+### Handling Missing Guidance
 
-| Phase | Race Analogy | Description |
-|-------|-------------|-------------|
-| Phase 1 | Pole Position | Stock is undervalued with high growth — best starting position |
-| Phase 2 | Leading the Pack | Growing fast but priced for it — maintaining lead |
-| Phase 3 | Pit Stop Needed | Overvalued with slowing growth — time to pull over |
-| Phase 4 | Back on Track | Low valuation, low growth — potential comeback |
+- If the concall has revenue guidance but no PAT guidance → uses revenue_growth
+- If ALL guidance fields are empty → falls back to extracted `pat_growth_yoy_pct`
+- If even that is null → returns `suggested_growth: null`, frontend defaults to 20%
+- The auto-fill is always visible to the user with source attribution (which field and quarter it came from)
+- User can always override the auto-filled value manually
+
+## Scenario Analysis
+
+Three scenarios are calculated with adjustable deltas:
+
+| Scenario | Growth Rate | Default Delta |
+|----------|-------------|---------------|
+| Base | User-specified (or auto-filled) | — |
+| Bull | Base + bull_delta | +10% |
+| Bear | max(Base - bear_delta, 0.01%) | -10% |
 
 ## Data Flow
 
 ```
-1. User sets growth rate + deltas on frontend sliders
-2. Frontend sends POST /api/valuation/{symbol}/calculate
-3. Backend checks for EPS and Price:
-   a. If provided manually → use those
-   b. If not → check stocks collection in MongoDB
-   c. If not in DB → fetch from yfinance
-   d. If all fail → return 400 error
-4. Run calculate_valuation() for base/bull/bear
-5. Determine overall phase from base case PEG + growth
-6. Save result to valuations collection
-7. Return ValuationResult to frontend
+1. User opens valuation page
+2. Frontend calls GET /api/valuation/{symbol}/guidance-prefill
+3. Backend finds latest concall by fiscal quarter
+4. Extracts growth rate from guidance fields
+5. Frontend auto-fills growth slider + shows source banner
+6. User adjusts sliders → POST /api/valuation/{symbol}/calculate
+7. Backend calculates 3 scenarios, determines phase
+8. Result saved to valuations collection
+9. Frontend shows phase speedometer + scenario cards
 ```
-
-## Frontend Integration
-
-- **Sensitivity sliders:** Adjust growth rate (0-60%), bull delta (0-30%), bear delta (0-30%)
-- **Auto-recalculate:** After first calculation, slider changes trigger debounced recalculation (500ms delay)
-- **Pre-population:** Growth rate slider is pre-populated from the stock's `eps_growth` field when available
-- **Phase speedometer:** Doughnut chart highlighting the current phase quadrant
-- **Scenario cards:** Three cards (Bear/Base/Bull) showing all calculated metrics with color coding
 
 ## API Endpoints
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | `/api/valuation/{symbol}/calculate` | Run scenario analysis |
-| GET | `/api/valuation/{symbol}/latest` | Get most recent saved valuation |
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| POST | `/{symbol}/calculate` | Yes | Run scenario analysis |
+| GET | `/{symbol}/latest` | No | Get most recent saved valuation |
+| GET | `/{symbol}/guidance-prefill` | No | Get growth rate from latest concall guidance |
 
-## Related Files
+## Frontend Components
+
+| Component | Purpose |
+|-----------|---------|
+| `valuation/page.tsx` | Main page: sliders, calculate button, results |
+| `scenario-panel.tsx` | Base/Bull/Bear cards with metrics |
+| `phase-speedometer.tsx` | Doughnut chart showing current phase |
+| `sensitivity-slider.tsx` | Growth rate and delta sliders |
+
+## Key Files
 
 | File | Purpose |
 |------|---------|
-| `app/valuation/router.py` | HTTP endpoints for calculate and latest |
-| `app/valuation/calculator.py` | Core calculation logic and phase determination |
-| `app/valuation/models.py` | Phase enum, ScenarioInput, ScenarioResult, ValuationResult |
-| `app/stocks/yfinance_service.py` | Fallback data source for EPS and price |
+| `backend/app/valuation/router.py` | API endpoints + guidance prefill |
+| `backend/app/valuation/calculator.py` | Core calculation logic |
+| `backend/app/valuation/models.py` | Phase enum, input/output models |

@@ -20,7 +20,7 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "QuantumStock — AI Equity Research",
   description:
-    "AI-powered equity research platform for Indian markets, built on Peter Lynch's investment framework",
+    "AI-powered equity research platform for Indian markets — con-call analysis, guidance tracking, forward valuation",
 };
 
 export default function RootLayout({

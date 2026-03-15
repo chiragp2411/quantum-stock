@@ -5,7 +5,6 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import api from "@/lib/api";
 import { Header } from "@/components/layout/header";
-import { AuthGuard } from "@/components/layout/auth-guard";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -16,6 +15,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { SessionNotebook } from "@/components/notes/session-notebook";
 import { LYNCH_CATEGORIES, PHASE_CONFIG, TOOLTIPS } from "@/lib/constants";
 import {
   ArrowLeft,
@@ -38,21 +38,23 @@ export default function StockPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let cancelled = false;
     api
       .get(`/api/stocks/${encodeURIComponent(symbol)}/summary`)
-      .then((res) => setData(res.data))
-      .catch(() => router.push("/dashboard"))
-      .finally(() => setLoading(false));
+      .then((res) => { if (!cancelled) setData(res.data); })
+      .catch(() => { if (!cancelled) router.push("/dashboard"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [symbol, router]);
 
   if (loading) {
     return (
-      <AuthGuard>
+      <>
         <Header />
         <div className="flex items-center justify-center py-32">
           <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
         </div>
-      </AuthGuard>
+      </>
     );
   }
 
@@ -80,7 +82,7 @@ export default function StockPage() {
   const isPositiveGrowth = (epsGrowth ?? 0) > 0;
 
   return (
-    <AuthGuard>
+    <>
       <Header />
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
         {/* Breadcrumb */}
@@ -225,7 +227,7 @@ export default function StockPage() {
                     <ArrowUpRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-amber-400 transition-colors shrink-0" />
                   </div>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Scenario analysis with base/bull/bear cases &amp; Lynch&apos;s phase matrix
+                    Scenario analysis with base/bull/bear cases &amp; growth-phase matrix
                   </p>
                   {phaseConf && (
                     <p className={`text-xs mt-2.5 font-medium ${phaseConf.color}`}>
@@ -240,8 +242,13 @@ export default function StockPage() {
             </Card>
           </Link>
         </div>
+
+        {/* Session Notebook */}
+        <div className="mt-8">
+          <SessionNotebook symbol={symbol} />
+        </div>
       </main>
-    </AuthGuard>
+    </>
   );
 }
 

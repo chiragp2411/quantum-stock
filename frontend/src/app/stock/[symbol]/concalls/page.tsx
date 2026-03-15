@@ -4,15 +4,17 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import api from "@/lib/api";
 import { Header } from "@/components/layout/header";
-import { AuthGuard } from "@/components/layout/auth-guard";
+import { useAuth } from "@/hooks/use-auth";
 import { PdfDropzone } from "@/components/concalls/pdf-dropzone";
 import { AnalysisCard } from "@/components/concalls/analysis-card";
 import { TrackerTable } from "@/components/concalls/tracker-table";
 import { GuidanceTrendChart } from "@/components/concalls/guidance-trend-chart";
 import { GuidanceVsActualsChart } from "@/components/concalls/guidance-vs-actuals-chart";
+import { FinancialKpiChart } from "@/components/concalls/financial-kpi-chart";
+import { CredibilityBadge } from "@/components/concalls/credibility-badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Brain, ChevronRight, FileText, Loader2, BarChart3, Trash2 } from "lucide-react";
+import { Brain, ChevronRight, FileText, Loader2, BarChart3, Trash2, IndianRupee } from "lucide-react";
 import { toast } from "sonner";
 import {
   DropdownMenu,
@@ -39,6 +41,26 @@ interface Concall {
     lynch_category?: string;
     confidence?: number;
     error?: string | null;
+    business_model?: string | null;
+    moat_signals?: string[];
+    competitive_advantages?: string[];
+    revenue_cr?: number | null;
+    ebitda_cr?: number | null;
+    pat_cr?: number | null;
+    ebitda_margin_pct?: number | null;
+    pat_margin_pct?: number | null;
+    revenue_growth_yoy_pct?: number | null;
+    pat_growth_yoy_pct?: number | null;
+    guidance_trajectory?: string | null;
+    guidance_trajectory_detail?: string | null;
+    contradictions?: string[];
+    capex_plans?: string[];
+    capacity_utilization?: string | null;
+    geographic_expansion?: string[];
+    investment_thesis?: string[];
+    sector_best_pick_rationale?: string | null;
+    analysis_provider?: string | null;
+    prev_guidance_comparison?: Record<string, Record<string, unknown>> | null;
   } | null;
   uploaded_at: string;
 }
@@ -51,16 +73,22 @@ interface TrackerRow {
   reasons: string;
   new_guidance: Record<string, string>;
   trajectory: string;
+  surprise?: string | null;
+  contradictions?: string[];
+  tone_score?: number;
 }
 
 export default function ConcallsPage() {
   const params = useParams();
   const router = useRouter();
+  const { isAuthenticated } = useAuth();
   const symbol = decodeURIComponent(params.symbol as string);
   const cleanSymbol = symbol.replace(".NS", "").replace(".BO", "");
 
   const [concalls, setConcalls] = useState<Concall[]>([]);
   const [tracker, setTracker] = useState<TrackerRow[]>([]);
+  const [credibility, setCredibility] = useState<{ hit_rate_pct: number | null; quarters_tracked: number; quarters_met: number } | null>(null);
+  const [financialTs, setFinancialTs] = useState<Record<string, unknown>[]>([]);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -73,6 +101,8 @@ export default function ConcallsPage() {
       ]);
       setConcalls(concallRes.data);
       setTracker(trackerRes.data.tracker || []);
+      setCredibility(trackerRes.data.credibility || null);
+      setFinancialTs(trackerRes.data.financial_timeseries || []);
       return concallRes.data as Concall[];
     } catch {
       return [] as Concall[];
@@ -82,8 +112,13 @@ export default function ConcallsPage() {
   }, [symbol]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    let cancelled = false;
+    (async () => {
+      if (!cancelled) await loadData();
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol]);
 
   const hasInProgress = concalls.some(
     (c) => c.status === "queued" || c.status === "analyzing"
@@ -161,7 +196,7 @@ export default function ConcallsPage() {
   }, {} as Record<string, string>);
 
   return (
-    <AuthGuard>
+    <>
       <Header />
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
         <nav className="mb-6 flex items-center gap-1.5 text-sm text-muted-foreground">
@@ -186,11 +221,20 @@ export default function ConcallsPage() {
               <p className="text-sm text-muted-foreground mt-0.5">
                 Upload earnings call transcripts and let AI analyze management guidance, tone, and execution
               </p>
+              {credibility && credibility.hit_rate_pct != null && (
+                <div className="mt-2">
+                  <CredibilityBadge
+                    hitRatePct={credibility.hit_rate_pct}
+                    quartersTracked={credibility.quarters_tracked}
+                    quartersMet={credibility.quarters_met}
+                  />
+                </div>
+              )}
             </div>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {concalls.length > 0 && (pendingCount > 0 || activeCount > 0) && (
+            {isAuthenticated && concalls.length > 0 && (pendingCount > 0 || activeCount > 0) && (
               <Button
                 onClick={handleAnalyzeAll}
                 disabled={analyzing}
@@ -207,7 +251,7 @@ export default function ConcallsPage() {
               </Button>
             )}
 
-            {concalls.length > 0 && (
+            {isAuthenticated && concalls.length > 0 && (
               <DropdownMenu>
                 <DropdownMenuTrigger
                   render={<Button variant="outline" size="sm" className="gap-1.5" />}
@@ -238,9 +282,19 @@ export default function ConcallsPage() {
           </div>
         </div>
 
-        <div className="mb-8">
-          <PdfDropzone symbol={symbol} onUploadComplete={loadData} />
-        </div>
+        {isAuthenticated && (
+          <div className="mb-8">
+            <PdfDropzone symbol={symbol} onUploadComplete={loadData} />
+          </div>
+        )}
+
+        {!isAuthenticated && (
+          <div className="mb-8 rounded-xl border border-dashed border-border/60 bg-card/30 p-6 text-center">
+            <p className="text-sm text-muted-foreground">
+              <a href="/login" className="text-emerald-500 hover:underline font-medium">Sign in</a> to upload and analyze con-call transcripts
+            </p>
+          </div>
+        )}
 
         {/* Analysis progress bar */}
         {analyzing && activeCount > 0 && (
@@ -248,7 +302,7 @@ export default function ConcallsPage() {
             <div className="flex items-center gap-2.5 mb-2">
               <Loader2 className="h-4 w-4 animate-spin text-emerald-500" />
               <span className="text-sm font-medium text-foreground">
-                Analyzing with local AI (Ollama)
+                Analyzing con-calls...
               </span>
             </div>
             <div className="flex gap-1.5">
@@ -294,6 +348,10 @@ export default function ConcallsPage() {
                 <FileText className="h-3.5 w-3.5" />
                 Guidance Tracker
               </TabsTrigger>
+              <TabsTrigger value="financials" className="gap-1.5 data-[state=active]:bg-background">
+                <IndianRupee className="h-3.5 w-3.5" />
+                Financials
+              </TabsTrigger>
               <TabsTrigger value="charts" className="gap-1.5 data-[state=active]:bg-background">
                 <BarChart3 className="h-3.5 w-3.5" />
                 Charts
@@ -301,6 +359,9 @@ export default function ConcallsPage() {
             </TabsList>
 
             <TabsContent value="analysis" className="space-y-4">
+              <p className="text-xs text-muted-foreground -mt-2 mb-2">
+                Click on any analyzed con-call to see the full AI research note with summary, guidance, business model, thesis, and more.
+              </p>
               {concalls.map((c) => (
                 <AnalysisCard
                   key={c._id}
@@ -313,6 +374,9 @@ export default function ConcallsPage() {
             </TabsContent>
 
             <TabsContent value="tracker">
+              <p className="text-xs text-muted-foreground mb-3">
+                Track whether management delivers on their promises. Green = guidance met, Red = guidance missed. The trajectory shows if guidance is being revised up or down over time.
+              </p>
               <TrackerTable
                 symbol={symbol}
                 tracker={tracker}
@@ -321,7 +385,17 @@ export default function ConcallsPage() {
               />
             </TabsContent>
 
+            <TabsContent value="financials">
+              <p className="text-xs text-muted-foreground mb-3">
+                Quarter-over-quarter financial KPIs extracted from analyzed con-calls. Helps you spot growth trends and margin expansion/compression.
+              </p>
+              <FinancialKpiChart data={financialTs as Record<string, unknown>[]} />
+            </TabsContent>
+
             <TabsContent value="charts" className="space-y-4">
+              <p className="text-xs text-muted-foreground -mt-2 mb-2">
+                Tone score measures management confidence and transparency (1-10). Execution score tracks how well they deliver on past promises (1-10).
+              </p>
               <div className="grid gap-4 lg:grid-cols-2">
                 <GuidanceTrendChart concalls={concalls} />
                 <GuidanceVsActualsChart tracker={tracker} />
@@ -330,6 +404,6 @@ export default function ConcallsPage() {
           </Tabs>
         )}
       </main>
-    </AuthGuard>
+    </>
   );
 }

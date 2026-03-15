@@ -2,7 +2,7 @@ export const LYNCH_CATEGORIES = {
   "Fast Grower": {
     color: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
     description:
-      "Companies growing earnings 20%+ annually. The sweet spot for Lynch.",
+      "Companies growing earnings 20%+ annually. The sweet spot for high returns.",
     analogy: "A sports car accelerating on an open highway — fast, exciting, high potential.",
   },
   Stalwart: {
@@ -78,6 +78,6 @@ export const TOOLTIPS = {
   upside: "How much the stock could go up (or down) from here based on fair value estimation.",
   toneScore: "Management's confidence level during the earnings call. 1 = worried, 10 = beaming with confidence.",
   executionScore: "How well management delivered on their previous promises. Actions speak louder than words.",
-  lynchCategory: "Peter Lynch's classification — like categorizing cars by their speed, reliability, and purpose.",
-  fairValue: "Fair Value = EPS x Growth Rate. Lynch's rule of thumb — the PE should roughly equal the growth rate.",
+  lynchCategory: "Growth classification — categorizing stocks by their speed, reliability, and purpose.",
+  fairValue: "Fair Value = EPS x Growth Rate. The PE should roughly equal the growth rate.",
 } as const;
