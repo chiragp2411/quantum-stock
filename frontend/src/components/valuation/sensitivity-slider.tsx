@@ -40,11 +40,12 @@ export function SensitivitySlider({
           label="Base Growth Rate"
           value={growthRate}
           min={0}
-          max={60}
+          max={100}
           step={1}
           onChange={onGrowthChange}
           suffix="%"
           color="emerald"
+          description="PAT growth rate from con-call guidance (or your manual estimate)"
         />
         <SliderRow
           label="Bull Delta"
