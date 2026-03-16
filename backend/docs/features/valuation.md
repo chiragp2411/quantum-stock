@@ -114,6 +114,25 @@ The system uses a comprehensive waterfall of 7 strategies to find the best growt
 | No concalls analyzed | Returns null | Large prompt to upload con-calls |
 | User overrides slider | Uses user's value | Shows both: guidance was X%, you set Y% |
 
+## Multi-Year Forward Valuation
+
+### How Forward Period Is Determined
+
+The valuation targets a single forward fiscal year determined by the latest concall quarter:
+
+| Concall Quarter | Forward Period | Reasoning |
+|----------------|---------------|-----------|
+| Q1FY26, Q2FY26, Q3FY26 | **FY26** | Guidance from within FY26 targets the current fiscal year |
+| Q4FY26 | **FY27** | Q4 results come at FY end, so guidance is for the next year |
+
+### "Management gave guidance for FY27 but system shows FY26?"
+
+This is by design. The system extracts the best growth rate from ALL guidance data (including FY27 targets) and applies it to current trailing EPS. The growth rate itself can come from comparing FY26→FY27 absolute targets, even though the valuation label says "FY26".
+
+### Saving vs Experimenting
+
+**Slider changes are local previews** — the scenario table updates instantly in the browser using client-side math so you can experiment freely. Nothing is saved to the database until you explicitly click **"Save & Calculate Valuation"**. This ensures the dashboard's "Bargain Opportunities" count only reflects intentionally saved valuations.
+
 ## Scenario Analysis
 
 Three scenarios are calculated with adjustable deltas:
@@ -163,15 +182,15 @@ The `GET /api/valuation/{symbol}/guidance-prefill` endpoint returns:
 ## Data Flow
 
 ```
-1. User opens valuation page
-2. Frontend calls GET /api/valuation/{symbol}/guidance-prefill
-3. Backend finds latest concall by fiscal quarter
-4. Extracts growth rate from guidance fields (priority order)
-5. Returns full transparency: source, raw value, assumptions, forward period
-6. Frontend shows "Data Source & Transparency" card with all details
-7. Any assumptions/warnings are shown prominently
-8. User adjusts sliders → POST /api/valuation/{symbol}/calculate
-9. Backend calculates 3 scenarios, determines phase
+1.  User opens valuation page
+2.  Frontend calls GET /guidance-prefill + GET /latest in parallel
+3.  Backend finds latest concall by fiscal quarter (not upload order)
+4.  Extracts growth rate from guidance fields (7-strategy waterfall)
+5.  Returns full transparency: source, raw value, assumptions, forward period
+6.  Frontend shows saved valuation from DB (if any) + prefill data
+7.  User adjusts sliders → preview recalculated locally (no API call)
+8.  User clicks "Save & Calculate" → POST /calculate
+9.  Backend fetches live EPS/price, calculates scenarios, determines phase
 10. Result saved to valuations collection
 11. Frontend shows phase speedometer + scenario cards + methodology
 ```

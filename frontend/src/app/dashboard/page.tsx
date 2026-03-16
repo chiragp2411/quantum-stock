@@ -248,7 +248,7 @@ export default function DashboardPage() {
           <div className="lg:col-span-2">
             <h3 className="text-lg font-semibold mb-4">Recent Activity</h3>
             {stats && stats.recent_activity.length > 0 ? (
-              <div className="space-y-2">
+              <div className="space-y-2 max-h-[480px] overflow-y-auto pr-1">
                 {stats.recent_activity.map((a, i) => {
                   const cleanSymbol = a.symbol.replace(".NS", "").replace(".BO", "");
                   const timeAgo = a.analyzed_at ? formatTimeAgo(a.analyzed_at) : "";

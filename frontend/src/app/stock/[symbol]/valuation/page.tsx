@@ -30,10 +30,6 @@ import {
   HelpCircle,
   Loader2,
   Settings2,
-  Sparkles,
-  TrendingUp,
-  TrendingDown,
-  ArrowRight,
   FileText,
   AlertTriangle,
   Info,
@@ -125,8 +121,14 @@ export default function ValuationPage() {
   const [prefill, setPrefill] = useState<GuidancePrefill | null>(null);
   const [growthOverridden, setGrowthOverridden] = useState(false);
 
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasCalculated = useRef(false);
+  const baseEpsRef = useRef(0);
+  const basePriceRef = useRef(0);
+  const [savedResult, setSavedResult] = useState<ValuationResult | null>(null);
+  const savedGrowthRef = useRef(20);
+  const savedBullRef = useRef(10);
+  const savedBearRef = useRef(10);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -142,7 +144,18 @@ export default function ValuationPage() {
         if (latestRes.status === "fulfilled" && latestRes.value.data.scenarios) {
           const scenarios = latestRes.value.data.scenarios;
           setResult(scenarios);
-          setGrowthRate(scenarios.base.growth_rate);
+          setSavedResult(scenarios);
+          baseEpsRef.current = scenarios.current_eps;
+          basePriceRef.current = scenarios.current_price;
+          const gr = scenarios.base.growth_rate;
+          const bd = scenarios.bull.growth_rate - scenarios.base.growth_rate || 10;
+          const bed = scenarios.base.growth_rate - scenarios.bear.growth_rate || 10;
+          setGrowthRate(gr);
+          setBullDelta(bd);
+          setBearDelta(bed);
+          savedGrowthRef.current = gr;
+          savedBullRef.current = bd;
+          savedBearRef.current = bed;
           hasCalculated.current = true;
         }
 
@@ -174,8 +187,54 @@ export default function ValuationPage() {
     return () => { cancelled = true; };
   }, [symbol]);
 
+  useEffect(() => {
+    if (!hasCalculated.current || initialLoading) return;
+    const eps = baseEpsRef.current;
+    const price = basePriceRef.current;
+    if (!eps || !price) return;
+
+    const buildScenario = (rate: number, label: string): Scenario => {
+      const fwdEps = eps * (1 + rate / 100);
+      const fwdPe = fwdEps > 0 ? price / fwdEps : 0;
+      const peg = rate > 0 ? fwdPe / rate : 999;
+      const fairValue = eps * rate;
+      const upside = price > 0 ? ((fairValue - price) / price) * 100 : 0;
+      let phase: string;
+      let phaseLabel: string;
+      if (peg <= 1 && rate >= 15) { phase = "Phase 1: Bargain (Low PE / High Growth)"; phaseLabel = "Pole Position"; }
+      else if (peg > 1.5 && rate >= 15) { phase = "Phase 2: Momentum (High PE / High Growth)"; phaseLabel = "Leading the Pack"; }
+      else if (peg > 1.5 && rate < 10) { phase = "Phase 3: Trap (High PE / Low Growth)"; phaseLabel = "Pit Stop Needed"; }
+      else if (peg <= 1 && rate < 10) { phase = "Phase 4: Turnaround (Low PE / Low Growth)"; phaseLabel = "Back on Track"; }
+      else if (rate >= 15) { phase = "Phase 2: Momentum (High PE / High Growth)"; phaseLabel = "Leading the Pack"; }
+      else if (peg <= 1) { phase = "Phase 4: Turnaround (Low PE / Low Growth)"; phaseLabel = "Back on Track"; }
+      else { phase = "Phase 3: Trap (High PE / Low Growth)"; phaseLabel = "Pit Stop Needed"; }
+      return {
+        label, growth_rate: Math.round(rate * 100) / 100,
+        forward_eps: Math.round(fwdEps * 100) / 100, forward_pat: 0,
+        forward_pe: Math.round(fwdPe * 100) / 100,
+        peg: Math.round(peg * 100) / 100,
+        fair_value: Math.round(fairValue * 100) / 100,
+        upside_pct: Math.round(upside * 100) / 100, phase, phase_label: phaseLabel,
+      };
+    };
+
+    const base = buildScenario(growthRate, "Base");
+    const bull = buildScenario(growthRate + bullDelta, "Bull");
+    const bear = buildScenario(Math.max(growthRate - bearDelta, 0.01), "Bear");
+    setResult((prev) => prev ? {
+      ...prev, base, bull, bear,
+      overall_phase: base.phase, overall_phase_label: base.phase_label,
+    } : null);
+
+    setHasUnsavedChanges(
+      growthRate !== savedGrowthRef.current
+      || bullDelta !== savedBullRef.current
+      || bearDelta !== savedBearRef.current
+    );
+  }, [growthRate, bullDelta, bearDelta, initialLoading]);
+
   const calculate = useCallback(
-    async (silent = false) => {
+    async () => {
       setLoading(true);
       try {
         const res = await api.post(
@@ -189,27 +248,25 @@ export default function ValuationPage() {
           }
         );
         setResult(res.data);
+        setSavedResult(res.data);
+        baseEpsRef.current = res.data.current_eps;
+        basePriceRef.current = res.data.current_price;
+        savedGrowthRef.current = growthRate;
+        savedBullRef.current = bullDelta;
+        savedBearRef.current = bearDelta;
         hasCalculated.current = true;
-        if (!silent) toast.success("Valuation calculated");
+        setHasUnsavedChanges(false);
+        toast.success("Valuation saved");
       } catch {
-        if (!silent) {
-          toast.error(
-            "Calculation failed — provide EPS and Price manually if stock data is unavailable."
-          );
-        }
+        toast.error(
+          "Calculation failed — provide EPS and Price manually if stock data is unavailable."
+        );
       } finally {
         setLoading(false);
       }
     },
     [symbol, growthRate, bullDelta, bearDelta, manualEps, manualPrice]
   );
-
-  useEffect(() => {
-    if (!hasCalculated.current || initialLoading) return;
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => { calculate(true); }, 500);
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [growthRate, bullDelta, bearDelta, calculate, initialLoading]);
 
   const handleGrowthChange = (val: number) => {
     setGrowthRate(val);
@@ -624,8 +681,12 @@ export default function ValuationPage() {
                   )}
 
                   <Button
-                    onClick={() => calculate(false)}
-                    className="w-full h-11 bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
+                    onClick={() => calculate()}
+                    className={`w-full h-11 text-white font-medium ${
+                      hasUnsavedChanges
+                        ? "bg-amber-600 hover:bg-amber-500"
+                        : "bg-emerald-600 hover:bg-emerald-500"
+                    }`}
                     disabled={loading}
                   >
                     {loading ? (
@@ -633,8 +694,17 @@ export default function ValuationPage() {
                     ) : (
                       <Calculator className="mr-2 h-4 w-4" />
                     )}
-                    {hasCalculated.current ? "Recalculate" : "Calculate Valuation"}
+                    {hasUnsavedChanges
+                      ? "Save & Calculate Valuation"
+                      : hasCalculated.current
+                        ? "Recalculate & Save"
+                        : "Calculate Valuation"}
                   </Button>
+                  {hasUnsavedChanges && (
+                    <p className="text-[11px] text-amber-500 text-center mt-1.5">
+                      Slider changes are previewed locally. Click above to save to database.
+                    </p>
+                  )}
                 </CardContent>
               </Card>
             </div>

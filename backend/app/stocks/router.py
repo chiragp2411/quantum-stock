@@ -85,15 +85,20 @@ def dashboard_stats():
     sectors: list[str] = stocks_col().distinct("sector")
     sectors = [s for s in sectors if s]
 
-    bargains = valuations_col().count_documents(
-        {"phase": {"$regex": "Phase 1", "$options": "i"}}
-    )
+    pipeline = [
+        {"$sort": {"created_at": -1}},
+        {"$group": {"_id": "$stock_symbol", "latest_phase": {"$first": "$phase"}}},
+        {"$match": {"latest_phase": {"$regex": "Phase 1", "$options": "i"}}},
+        {"$count": "total"},
+    ]
+    agg_result = list(valuations_col().aggregate(pipeline))
+    bargains = agg_result[0]["total"] if agg_result else 0
 
     recent_activity = []
     for doc in concalls_col().find(
         {"analyzed_at": {"$ne": None}},
         {"stock_symbol": 1, "quarter": 1, "analyzed_at": 1},
-    ).sort("analyzed_at", -1).limit(5):
+    ).sort("analyzed_at", -1).limit(10):
         recent_activity.append({
             "symbol": doc["stock_symbol"],
             "quarter": doc.get("quarter", ""),

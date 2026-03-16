@@ -101,8 +101,8 @@ def _parse_quarter(q: str) -> tuple[int, int]:
 def _forward_period(quarter: str) -> str:
     """Determine the forward valuation period from the concall quarter.
 
-    Guidance given in Q3FY26 (Oct-Dec 2025) is typically for FY26 remaining + FY27.
-    The forward period for valuation is the NEXT full fiscal year.
+    Q1-Q3 of FYxx → Valuation targets FYxx (current year's full-year projections).
+    Q4 of FYxx → Valuation targets FY(xx+1) since FYxx is complete.
     """
     qn, fy = _parse_quarter(quarter)
     if fy == 0:
