@@ -6,15 +6,18 @@ all analysis fields as structured JSON matching the ConCallAnalysis schema.
 
 import json
 import logging
+import re
 from typing import Optional
 
 from google import genai
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.config import settings
 from app.concalls.models import ConCallAnalysis, GuidanceItem
 
 logger = logging.getLogger(__name__)
+
+_MAX_RETRIES = 2
 
 # ---------------------------------------------------------------------------
 # System prompt — the master instruction set for Gemini
@@ -275,6 +278,71 @@ class _GeminiAnalysisSchema(BaseModel):
 # Main analysis function
 # ---------------------------------------------------------------------------
 
+def _repair_truncated_json(raw: str) -> str:
+    """Attempt to repair JSON truncated mid-generation by Gemini.
+
+    Common truncation patterns:
+      - Cut inside a string value → close the string, close all open brackets
+      - Cut after a comma → remove trailing comma, close brackets
+      - Cut mid-key → remove partial key, close brackets
+    """
+    text = raw.rstrip()
+    if not text:
+        return text
+
+    try:
+        json.loads(text)
+        return text
+    except json.JSONDecodeError:
+        pass
+
+    in_string = False
+    escape = False
+    stack: list[str] = []
+
+    for ch in text:
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            if in_string:
+                escape = True
+            continue
+        if ch == '"' and not escape:
+            in_string = not in_string
+            continue
+        if not in_string:
+            if ch in ("{", "["):
+                stack.append(ch)
+            elif ch in ("}", "]"):
+                if stack:
+                    stack.pop()
+
+    repaired = text
+    if in_string:
+        repaired += '"'
+
+    repaired = repaired.rstrip().rstrip(",")
+
+    for opener in reversed(stack):
+        repaired += "}" if opener == "{" else "]"
+
+    try:
+        json.loads(repaired)
+        return repaired
+    except json.JSONDecodeError:
+        pass
+
+    repaired_v2 = re.sub(r',\s*([}\]])', r'\1', repaired)
+    try:
+        json.loads(repaired_v2)
+        return repaired_v2
+    except json.JSONDecodeError:
+        pass
+
+    return raw
+
+
 def analyze_concall_gemini(
     text: str,
     quarter_hint: str = "",
@@ -282,7 +350,10 @@ def analyze_concall_gemini(
     symbol: str = "",
     sector: str = "",
 ) -> ConCallAnalysis:
-    """Analyze a con-call transcript using Gemini structured output."""
+    """Analyze a con-call transcript using Gemini structured output.
+
+    Includes retry logic and JSON repair for truncated responses.
+    """
 
     if not settings.gemini_api_key:
         raise ValueError("GEMINI_API_KEY not configured in .env")
@@ -297,53 +368,87 @@ def analyze_concall_gemini(
         sector=sector,
     )
 
-    logger.info(
-        "Calling Gemini (model=%s, text_len=%d, symbol=%s)...",
-        settings.gemini_model,
-        len(text),
-        symbol,
-    )
+    last_error: Exception | None = None
 
-    response = client.models.generate_content(
-        model=settings.gemini_model,
-        contents=[
-            {"role": "user", "parts": [{"text": _SYSTEM_PROMPT + "\n\n" + user_prompt}]},
-        ],
-        config={
-            "response_mime_type": "application/json",
-            "response_json_schema": _GeminiAnalysisSchema.model_json_schema(),
-            "temperature": 0.15,
-            "max_output_tokens": 16384,
-        },
-    )
+    for attempt in range(_MAX_RETRIES + 1):
+        token_limit = 65536 if attempt > 0 else 32768
 
-    raw_text = response.text
-    logger.info("Gemini response received (%d chars)", len(raw_text))
+        logger.info(
+            "Calling Gemini (model=%s, text_len=%d, symbol=%s, attempt=%d, max_tokens=%d)...",
+            settings.gemini_model,
+            len(text),
+            symbol,
+            attempt + 1,
+            token_limit,
+        )
 
-    parsed = _GeminiAnalysisSchema.model_validate_json(raw_text)
+        try:
+            response = client.models.generate_content(
+                model=settings.gemini_model,
+                contents=[
+                    {"role": "user", "parts": [{"text": _SYSTEM_PROMPT + "\n\n" + user_prompt}]},
+                ],
+                config={
+                    "response_mime_type": "application/json",
+                    "response_json_schema": _GeminiAnalysisSchema.model_json_schema(),
+                    "temperature": 0.15,
+                    "max_output_tokens": token_limit,
+                },
+            )
 
-    model_fields = set(ConCallAnalysis.model_fields.keys())
-    fields = {k: v for k, v in parsed.model_dump().items() if k in model_fields}
-    fields["analysis_provider"] = "gemini"
+            raw_text = response.text or ""
+            logger.info("Gemini response received (%d chars, attempt=%d)", len(raw_text), attempt + 1)
 
-    if quarter_hint and (not fields.get("quarter") or fields["quarter"] == "Unknown"):
-        fields["quarter"] = quarter_hint
+            if not raw_text.strip():
+                raise ValueError("Gemini returned empty response")
 
-    analysis = ConCallAnalysis(**fields)
+            try:
+                parsed = _GeminiAnalysisSchema.model_validate_json(raw_text)
+            except ValidationError:
+                logger.warning(
+                    "JSON validation failed (attempt=%d), attempting repair...", attempt + 1
+                )
+                repaired = _repair_truncated_json(raw_text)
+                if repaired != raw_text:
+                    logger.info("JSON repaired (%d → %d chars)", len(raw_text), len(repaired))
+                parsed = _GeminiAnalysisSchema.model_validate_json(repaired)
 
-    logger.info(
-        "Gemini analysis complete: quarter=%s, tone=%d, highlights=%d, "
-        "structured_guidance=%d, legacy_guidance=%d, thesis=%d, summary=%d chars",
-        analysis.quarter,
-        analysis.tone_score,
-        len(analysis.highlights),
-        len(analysis.structured_guidance),
-        len(analysis.guidance),
-        len(analysis.investment_thesis),
-        len(analysis.detailed_summary),
-    )
+            model_fields = set(ConCallAnalysis.model_fields.keys())
+            fields = {k: v for k, v in parsed.model_dump().items() if k in model_fields}
+            fields["analysis_provider"] = "gemini"
 
-    return analysis
+            if quarter_hint and (not fields.get("quarter") or fields["quarter"] == "Unknown"):
+                fields["quarter"] = quarter_hint
+
+            analysis = ConCallAnalysis(**fields)
+
+            logger.info(
+                "Gemini analysis complete: quarter=%s, tone=%d, highlights=%d, "
+                "structured_guidance=%d, legacy_guidance=%d, thesis=%d, summary=%d chars",
+                analysis.quarter,
+                analysis.tone_score,
+                len(analysis.highlights),
+                len(analysis.structured_guidance),
+                len(analysis.guidance),
+                len(analysis.investment_thesis),
+                len(analysis.detailed_summary),
+            )
+
+            return analysis
+
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                "Gemini attempt %d/%d failed: %s",
+                attempt + 1,
+                _MAX_RETRIES + 1,
+                str(e)[:300],
+            )
+            if attempt < _MAX_RETRIES:
+                continue
+            raise last_error  # type: ignore[misc]
+
+    raise last_error or RuntimeError("All Gemini attempts failed")
 
 
 # ---------------------------------------------------------------------------
