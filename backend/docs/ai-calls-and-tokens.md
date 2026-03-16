@@ -175,3 +175,63 @@ INFO: Gemini analysis complete: quarter=Q3FY26, tone=8, highlights=6, structured
 ```
 
 The `text_len` in the log gives the input text character count (divide by ~4 for approximate token count). The response char count similarly approximates output tokens.
+
+## Analytics Storage in MongoDB
+
+Every Gemini API call is recorded in the `ai_analytics` collection with these fields:
+
+| Field | Type | What It Captures |
+|-------|------|-----------------|
+| `event` | string | Always `"concall_analysis"` for now |
+| `symbol` | string | Stock symbol (e.g., `SKYGOLD.NS`) |
+| `concall_id` | string | Reference to the concall document |
+| `quarter` | string | Fiscal quarter (e.g., `Q3FY26`) |
+| `status` | string | `completed` or `failed` |
+| `pdf_filename` | string | Original uploaded filename |
+| `uploaded_by` | string | Username who uploaded the PDF |
+| `model` | string | Gemini model used (e.g., `gemini-2.5-flash`) |
+| `input_tokens` | int | Actual input tokens (from Gemini response metadata) |
+| `output_tokens` | int | Actual output tokens (from Gemini response metadata) |
+| `total_tokens` | int | input + output |
+| `input_text_chars` | int | Character count of the transcript text |
+| `output_text_chars` | int | Character count of the JSON response |
+| `system_prompt_chars` | int | Character count of the system prompt |
+| `prev_context_chars` | int | Character count of previous quarter context |
+| `attempts` | int | How many API calls were needed (1-3) |
+| `max_output_tokens_used` | int | Token limit used (32768 first, 65536 on retry) |
+| `json_repaired` | boolean | Whether JSON repair was needed |
+| `wall_time_seconds` | float | Total wall-clock time for all attempts |
+| `temperature` | float | Temperature setting used |
+| `created_at` | datetime | When the analysis was performed |
+
+### What You Can Learn from Analytics
+
+**Cost tracking:**
+```javascript
+db.ai_analytics.aggregate([
+  { $group: { _id: null, total_input: { $sum: "$input_tokens" }, total_output: { $sum: "$output_tokens" } } }
+])
+```
+
+**Average tokens per concall:**
+```javascript
+db.ai_analytics.aggregate([
+  { $match: { status: "completed" } },
+  { $group: { _id: null, avg_input: { $avg: "$input_tokens" }, avg_output: { $avg: "$output_tokens" }, avg_time: { $avg: "$wall_time_seconds" } } }
+])
+```
+
+**Retry/repair rate (indicates prompt or token limit issues):**
+```javascript
+db.ai_analytics.aggregate([
+  { $group: { _id: null, total: { $sum: 1 }, retried: { $sum: { $cond: [{ $gt: ["$attempts", 1] }, 1, 0] } }, repaired: { $sum: { $cond: ["$json_repaired", 1, 0] } } } }
+])
+```
+
+**Cost per stock:**
+```javascript
+db.ai_analytics.aggregate([
+  { $group: { _id: "$symbol", total_tokens: { $sum: "$total_tokens" }, calls: { $sum: 1 } } },
+  { $sort: { total_tokens: -1 } }
+])
+```

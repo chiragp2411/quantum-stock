@@ -278,6 +278,35 @@ sequenceDiagram
 }
 ```
 
+### `ai_analytics` Collection
+```json
+{
+  "_id": "ObjectId",
+  "event": "concall_analysis",
+  "symbol": "string (e.g. 'SKYGOLD.NS')",
+  "concall_id": "string (ObjectId reference)",
+  "quarter": "string (e.g. 'Q3FY26')",
+  "status": "completed | failed",
+  "pdf_filename": "string",
+  "uploaded_by": "string (username)",
+  "model": "string (e.g. 'gemini-2.5-flash')",
+  "provider": "gemini",
+  "input_tokens": "int",
+  "output_tokens": "int",
+  "total_tokens": "int",
+  "input_text_chars": "int (transcript character count)",
+  "output_text_chars": "int (JSON response character count)",
+  "system_prompt_chars": "int",
+  "prev_context_chars": "int (previous quarters context size)",
+  "attempts": "int (1-3, how many API calls were needed)",
+  "max_output_tokens_used": "int (32768 or 65536)",
+  "json_repaired": "boolean",
+  "wall_time_seconds": "float",
+  "temperature": "float",
+  "created_at": "datetime (UTC)"
+}
+```
+
 ## Design Decisions
 
 1. **MongoDB over SQL**: Document model fits the semi-structured nature of LLM outputs and flexible financial data shapes. GridFS provides built-in binary storage without external object stores.

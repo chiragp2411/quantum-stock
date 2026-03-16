@@ -349,10 +349,11 @@ def analyze_concall_gemini(
     prev_analysis_json: Optional[str] = None,
     symbol: str = "",
     sector: str = "",
-) -> ConCallAnalysis:
+) -> tuple[ConCallAnalysis, dict]:
     """Analyze a con-call transcript using Gemini structured output.
 
-    Includes retry logic and JSON repair for truncated responses.
+    Returns (analysis, usage_meta) where usage_meta contains token counts,
+    model info, attempt count, and timing for analytics storage.
     """
 
     if not settings.gemini_api_key:
@@ -369,8 +370,16 @@ def analyze_concall_gemini(
     )
 
     last_error: Exception | None = None
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_attempts = 0
+    json_repaired = False
+
+    import time
+    wall_start = time.monotonic()
 
     for attempt in range(_MAX_RETRIES + 1):
+        total_attempts = attempt + 1
         token_limit = 65536 if attempt > 0 else 32768
 
         logger.info(
@@ -396,6 +405,11 @@ def analyze_concall_gemini(
                 },
             )
 
+            usage = getattr(response, "usage_metadata", None)
+            if usage:
+                total_input_tokens += getattr(usage, "prompt_token_count", 0) or 0
+                total_output_tokens += getattr(usage, "candidates_token_count", 0) or 0
+
             raw_text = response.text or ""
             logger.info("Gemini response received (%d chars, attempt=%d)", len(raw_text), attempt + 1)
 
@@ -411,6 +425,7 @@ def analyze_concall_gemini(
                 repaired = _repair_truncated_json(raw_text)
                 if repaired != raw_text:
                     logger.info("JSON repaired (%d → %d chars)", len(raw_text), len(repaired))
+                    json_repaired = True
                 parsed = _GeminiAnalysisSchema.model_validate_json(repaired)
 
             model_fields = set(ConCallAnalysis.model_fields.keys())
@@ -422,9 +437,12 @@ def analyze_concall_gemini(
 
             analysis = ConCallAnalysis(**fields)
 
+            wall_elapsed = round(time.monotonic() - wall_start, 2)
+
             logger.info(
                 "Gemini analysis complete: quarter=%s, tone=%d, highlights=%d, "
-                "structured_guidance=%d, legacy_guidance=%d, thesis=%d, summary=%d chars",
+                "structured_guidance=%d, legacy_guidance=%d, thesis=%d, summary=%d chars, "
+                "input_tokens=%d, output_tokens=%d, attempts=%d, wall_time=%.1fs",
                 analysis.quarter,
                 analysis.tone_score,
                 len(analysis.highlights),
@@ -432,9 +450,30 @@ def analyze_concall_gemini(
                 len(analysis.guidance),
                 len(analysis.investment_thesis),
                 len(analysis.detailed_summary),
+                total_input_tokens,
+                total_output_tokens,
+                total_attempts,
+                wall_elapsed,
             )
 
-            return analysis
+            usage_meta = {
+                "model": settings.gemini_model,
+                "provider": "gemini",
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+                "total_tokens": total_input_tokens + total_output_tokens,
+                "input_text_chars": len(text),
+                "output_text_chars": len(raw_text),
+                "system_prompt_chars": len(_SYSTEM_PROMPT),
+                "prev_context_chars": len(prev_analysis_json) if prev_analysis_json else 0,
+                "attempts": total_attempts,
+                "max_output_tokens_used": token_limit,
+                "json_repaired": json_repaired,
+                "wall_time_seconds": wall_elapsed,
+                "temperature": 0.15,
+            }
+
+            return analysis, usage_meta
 
         except Exception as e:
             last_error = e

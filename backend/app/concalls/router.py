@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
 from app.auth.utils import get_current_user
 from app.config import settings
-from app.database import concalls_col, financials_col, get_gridfs
+from app.database import ai_analytics_col, concalls_col, financials_col, get_gridfs
 from app.concalls.models import ConCallAnalysis, GuidanceRow, ManualOverride
 from app.concalls.pdf_parser import extract_text_from_pdf
 from app.concalls.llm_analyzer import analyze_concall, guess_quarter
@@ -101,12 +101,13 @@ def _analyze_single_concall(doc_id: ObjectId, symbol: str) -> None:
 
     try:
         provider = settings.analysis_provider.lower()
+        usage_meta: dict | None = None
 
         if provider == "gemini" and settings.gemini_api_key:
             from app.concalls.gemini_analyzer import analyze_concall_gemini
 
             prev_json = _get_prev_analysis_json(symbol, doc_id)
-            analysis = analyze_concall_gemini(
+            analysis, usage_meta = analyze_concall_gemini(
                 text=doc["raw_text"],
                 quarter_hint=doc.get("quarter", ""),
                 prev_analysis_json=prev_json,
@@ -132,6 +133,22 @@ def _analyze_single_concall(doc_id: ObjectId, symbol: str) -> None:
             },
         )
         logger.info("Concall %s: %s (quarter=%s, provider=%s)", doc_id, new_status, analysis.quarter, provider)
+
+        if usage_meta:
+            try:
+                ai_analytics_col().insert_one({
+                    "event": "concall_analysis",
+                    "symbol": symbol,
+                    "concall_id": str(doc_id),
+                    "quarter": analysis.quarter,
+                    "status": new_status,
+                    "pdf_filename": doc.get("pdf_filename", ""),
+                    "uploaded_by": doc.get("uploaded_by", ""),
+                    **usage_meta,
+                    "created_at": datetime.now(timezone.utc),
+                })
+            except Exception:
+                logger.warning("Failed to save AI analytics for concall %s", doc_id)
     except Exception as exc:
         logger.exception("Analysis failed for concall %s", doc_id)
         col.update_one(

@@ -49,6 +49,10 @@ def notes_col() -> Collection:
     return get_db()["stock_notes"]
 
 
+def ai_analytics_col() -> Collection:
+    return get_db()["ai_analytics"]
+
+
 def ensure_indexes() -> None:
     """Create indexes on first startup."""
     users_col().create_index("username", unique=True)
@@ -57,3 +61,5 @@ def ensure_indexes() -> None:
     financials_col().create_index([("stock_symbol", 1), ("period", 1)])
     valuations_col().create_index([("stock_symbol", 1), ("created_at", -1)])
     notes_col().create_index([("stock_symbol", 1), ("created_at", -1)])
+    ai_analytics_col().create_index([("created_at", -1)])
+    ai_analytics_col().create_index([("symbol", 1), ("created_at", -1)])
