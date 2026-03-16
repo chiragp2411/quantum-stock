@@ -87,24 +87,30 @@ The system finds the latest concall by **fiscal quarter** (not upload date), so 
 3. Sorts by fiscal quarter descending
 4. Uses the most recent quarter's guidance
 
-### What Forward Data Is Extracted
+### What Forward Data Is Extracted — 7-Strategy Waterfall
 
-The system looks for these fields in priority order from `analysis.guidance`:
+The system uses a comprehensive waterfall of 7 strategies to find the best growth rate, ensuring real management guidance is NEVER missed:
 
-1. `pat_growth` or `pat_growth_pct` — PAT growth guidance (preferred)
-2. `pat` — Absolute PAT guidance
-3. `earnings_growth` — Earnings growth guidance
-4. `revenue_growth` — Revenue growth guidance (disclosed as proxy)
-5. **Fallback**: `pat_growth_yoy_pct` — Historical actual PAT growth (disclosed as backward-looking)
+| Priority | Strategy | What It Looks For | Example |
+|----------|---------|-------------------|---------|
+| 1 | Structured growth % | `pat_growth`, `ebitda_growth`, `earnings_cagr`, `revenue_growth` with `unit=pct` in `structured_guidance` | "25-30% PAT growth" → 30% |
+| 2 | Implied growth from absolute FY targets | Two consecutive FY targets for `pat` or `revenue` (unit=cr), calculates YoY growth or CAGR | Revenue FY26=₹6100cr, FY27=₹8100cr → 32.8% |
+| 3 | Derived PAT from (Revenue × PAT margin) | Forward revenue + forward PAT margin guidance → calculate forward PAT → compare with trailing PAT | Rev ₹8100cr × 4.25% margin = ₹344cr PAT vs trailing ₹200cr → 72% |
+| 4 | Legacy guidance dict (broad search) | Searches all keys containing `growth`, `cagr`, `pat`, `revenue` | Legacy key `revenue_CAGR_FY26-30: 30-35%` → 35% |
+| 5 | Historical growth (this concall) | `pat_growth_yoy_pct` or `revenue_growth_yoy_pct` from the analysis | Reported PAT growth 82% YoY |
+| 6 | Historical growth (previous concalls) | Same fields from prior 1-3 concalls | Q2FY26 PAT growth 82% |
+| 7 | Default 20% | Absolute last resort — all 6 strategies found nothing | "Defaults to 20%. Override with your research." |
 
 ### Handling Missing Guidance
 
 | Situation | What Happens | User Sees |
 |-----------|-------------|-----------|
-| PAT growth guidance exists | Uses directly | "PAT Growth (management guidance): 30%" |
-| Only revenue guidance | Uses revenue growth | Warning: "Using revenue growth as proxy — PAT may differ" |
-| No guidance, but historical data | Uses pat_growth_yoy_pct | Warning: "Using historical PAT growth, not forward guidance" |
-| Nothing available | Returns null, frontend defaults to 20% | Warning: "No guidance found — defaults to 20%. Override with your research." |
+| Direct PAT growth % in guidance | Strategy 1: uses directly | "PAT Growth (management guidance): 30%" |
+| Absolute PAT/Revenue FY targets | Strategy 2: calculates implied growth | "Implied Revenue Growth (FY26→FY27): 32.8%" with calculation shown |
+| Revenue + PAT margin guidance | Strategy 3: derives forward PAT | "Derived PAT Growth (Revenue × Margin guidance)" with full formula |
+| Only legacy CAGR keys | Strategy 4: parses from legacy dict | "Revenue Growth (legacy guidance): 30-35%" |
+| Only historical data | Strategy 5-6: uses backward-looking growth | Warning: "Using historical PAT growth, not forward guidance" |
+| Nothing across all concalls | Strategy 7: defaults to 20% | Warning: "No guidance found — defaults to 20%. Override." |
 | No concalls analyzed | Returns null | Large prompt to upload con-calls |
 | User overrides slider | Uses user's value | Shows both: guidance was X%, you set Y% |
 

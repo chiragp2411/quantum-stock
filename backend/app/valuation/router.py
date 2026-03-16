@@ -191,105 +191,217 @@ def guidance_prefill(symbol: str):
 
     fwd_period = _forward_period(quarter)
 
-    # --- Strategy 1: Use structured_guidance (preferred — direct numeric values) ---
-    if structured:
-        priority_metrics = [
+    def _sg_items(metric_key: str, unit: str | None = None) -> list[dict]:
+        """Find structured guidance items by metric key and optional unit."""
+        return [
+            item for item in structured
+            if isinstance(item, dict)
+            and item.get("metric") == metric_key
+            and item.get("guidance_type") != "withdrawn"
+            and (unit is None or item.get("unit") == unit)
+        ]
+
+    def _sg_value(items: list[dict]) -> float | None:
+        """Get best numeric value from guidance items (prefer high, then low)."""
+        for item in items:
+            v = item.get("value_high") or item.get("value_low")
+            if v is not None and v > 0:
+                return float(v)
+        return None
+
+    def _set_found(
+        val: float, key: str, label: str, raw: str, items: list[dict],
+    ) -> None:
+        nonlocal suggested, source_key, source_label, source_raw_value
+        suggested = val
+        source_key = key
+        source_label = label
+        source_raw_value = raw
+        guidance_items_used.extend(items)
+
+    # ===================================================================
+    # Strategy 1: Structured guidance — direct growth % metrics
+    # ===================================================================
+    if structured and suggested is None:
+        growth_metrics = [
             ("pat_growth", "PAT Growth"),
             ("ebitda_growth", "EBITDA Growth"),
             ("earnings_cagr", "Earnings CAGR"),
             ("revenue_growth", "Revenue Growth"),
         ]
-
-        for metric_key, label in priority_metrics:
-            matching = [
-                item for item in structured
-                if isinstance(item, dict)
-                and item.get("metric") == metric_key
-                and item.get("unit") == "pct"
-                and item.get("guidance_type") != "withdrawn"
-            ]
-            if not matching:
-                continue
-
-            best = matching[0]
-            val_high = best.get("value_high")
-            val_low = best.get("value_low")
-            val = val_high or val_low
-            if val is not None and val > 0:
-                suggested = float(val)
-                source_key = metric_key
-                source_label = f"{label} (management guidance — {best.get('guidance_type', 'explicit')})"
-                source_raw_value = best.get("value_text", "")
-                guidance_items_used.append(best)
-
-                if metric_key == "revenue_growth":
+        for metric_key, label in growth_metrics:
+            items = _sg_items(metric_key, unit="pct")
+            val = _sg_value(items)
+            if val is not None:
+                _set_found(val, metric_key, f"{label} (management guidance)", items[0].get("value_text", ""), items[:1])
+                if "revenue" in metric_key:
                     assumptions.append(
-                        "PAT growth guidance was not available. Using revenue growth "
-                        "as a proxy — actual PAT growth may differ depending on margin changes."
-                    )
-                if best.get("guidance_type") == "vague_range":
-                    assumptions.append(
-                        f"Management used vague language (\"{best.get('value_text')}\"). "
-                        f"System estimated {val_low}-{val_high}% range; using upper bound."
-                    )
-                if best.get("conditions"):
-                    assumptions.append(
-                        f"This guidance is conditional: \"{best['conditions']}\""
-                    )
-                if best.get("revision") == "lowered":
-                    assumptions.append(
-                        "Guidance was LOWERED compared to the previous quarter. "
-                        f"{best.get('revision_detail', '')}"
+                        "PAT growth guidance not available. Using revenue growth as proxy — "
+                        "actual PAT growth may differ depending on margin changes."
                     )
                 break
 
-    # --- Strategy 2: Fall back to legacy guidance dict ---
-    if suggested is None and guidance:
-        legacy_priority = [
-            ("pat_growth", "PAT Growth (legacy guidance)"),
-            ("pat_growth_pct", "PAT Growth % (legacy guidance)"),
-            ("pat", "PAT (legacy guidance)"),
-            ("earnings_growth", "Earnings Growth (legacy guidance)"),
-            ("revenue_growth", "Revenue Growth (legacy guidance)"),
-        ]
-
-        for key, label in legacy_priority:
-            val = guidance.get(key, "")
-            if not val:
+    # ===================================================================
+    # Strategy 2: Calculate implied growth from consecutive FY absolute targets
+    #   e.g. revenue FY26=6100cr, FY27=8100cr → growth = 32.8%
+    # ===================================================================
+    if structured and suggested is None:
+        for abs_metric, label in [("pat", "PAT"), ("revenue", "Revenue")]:
+            abs_items = _sg_items(abs_metric, unit="cr")
+            if len(abs_items) < 2:
                 continue
-            numbers = re.findall(r"[\d.]+", str(val))
-            if numbers:
-                try:
-                    suggested = float(numbers[-1])
-                    source_key = key
-                    source_label = label
-                    source_raw_value = str(val)
-                    break
-                except (ValueError, IndexError):
-                    continue
 
-        if suggested is not None and source_key and "revenue" in source_key:
-            assumptions.append(
-                "PAT growth guidance was not available in this con-call. "
-                "Using revenue growth as a proxy — actual PAT growth may differ."
-            )
+            by_period: dict[str, float] = {}
+            for item in abs_items:
+                p = item.get("period", "")
+                v = item.get("value_high") or item.get("value_low")
+                if v and v > 0:
+                    by_period[p] = v
 
-    # --- Strategy 3: Fall back to historical PAT growth ---
+            sorted_periods = sorted(by_period.keys(), key=lambda p: _parse_quarter(f"Q4{p}")[1] if "FY" in p else 0)
+            for i in range(len(sorted_periods) - 1):
+                p_cur, p_next = sorted_periods[i], sorted_periods[i + 1]
+                v_cur, v_next = by_period[p_cur], by_period[p_next]
+                if v_cur > 0 and v_next > v_cur:
+                    _, fy_cur = _parse_quarter(f"Q4{p_cur}")
+                    _, fy_next = _parse_quarter(f"Q4{p_next}")
+                    years = max(fy_next - fy_cur, 1)
+                    if years == 1:
+                        implied = ((v_next / v_cur) - 1) * 100
+                    else:
+                        implied = ((v_next / v_cur) ** (1 / years) - 1) * 100
+                    implied = round(implied, 1)
+                    if implied > 0:
+                        raw_text = f"{label} {p_cur}=₹{v_cur:.0f}cr → {p_next}=₹{v_next:.0f}cr"
+                        used = [it for it in abs_items if it.get("period") in (p_cur, p_next)]
+                        _set_found(implied, f"implied_{abs_metric}_growth", f"Implied {label} Growth ({p_cur}→{p_next})", raw_text, used)
+                        assumptions.append(
+                            f"Management guided absolute {label} targets: ₹{v_cur:.0f} cr ({p_cur}) → "
+                            f"₹{v_next:.0f} cr ({p_next}). System calculated implied "
+                            f"{'CAGR' if years > 1 else 'YoY growth'} of {implied:.1f}%."
+                        )
+                        if abs_metric == "revenue":
+                            assumptions.append(
+                                "This is revenue growth, not PAT growth. Actual PAT growth may differ."
+                            )
+                        break
+            if suggested is not None:
+                break
+
+    # ===================================================================
+    # Strategy 3: Derive PAT growth from (forward revenue * PAT margin guidance)
+    #   e.g. revenue FY27=8100cr + PAT margin FY27=4.25% → forward PAT=344cr
+    #   Compare with trailing PAT to get implied growth
+    # ===================================================================
+    if structured and suggested is None:
+        rev_items = _sg_items("revenue", unit="cr")
+        margin_items = _sg_items("pat_margin", unit="pct")
+        if rev_items and margin_items:
+            fwd_rev = _sg_value(rev_items)
+            fwd_margin = _sg_value(margin_items)
+            trailing_pat = analysis.get("pat_cr")
+            if not trailing_pat:
+                for prev_doc in candidates[1:3]:
+                    pa = prev_doc.get("analysis", {})
+                    if pa.get("pat_cr"):
+                        trailing_pat = pa["pat_cr"]
+                        break
+
+            if fwd_rev and fwd_margin and trailing_pat and trailing_pat > 0:
+                fwd_pat = fwd_rev * (fwd_margin / 100)
+                annual_pat = trailing_pat * 4
+                if annual_pat > 0 and fwd_pat > 0:
+                    implied = ((fwd_pat / annual_pat) - 1) * 100
+                    if implied > 0:
+                        raw = f"Rev ₹{fwd_rev:.0f}cr × Margin {fwd_margin}% = PAT ₹{fwd_pat:.0f}cr vs trailing ₹{annual_pat:.0f}cr"
+                        _set_found(round(implied, 1), "derived_pat_growth", "Derived PAT Growth (Revenue × Margin guidance)", raw, rev_items[:1] + margin_items[:1])
+                        assumptions.append(
+                            f"PAT growth calculated from: Forward Revenue (₹{fwd_rev:.0f} cr) × "
+                            f"PAT Margin ({fwd_margin}%) = Forward PAT ₹{fwd_pat:.0f} cr, vs "
+                            f"trailing annualized PAT ₹{annual_pat:.0f} cr. "
+                            "This is a derived estimate, not direct management guidance."
+                        )
+
+    # ===================================================================
+    # Strategy 4: Legacy guidance dict — broad search for growth/CAGR keys
+    # ===================================================================
+    if suggested is None and guidance:
+        growth_keywords_priority = [
+            (["pat_growth", "pat_cagr", "earnings_growth", "earnings_cagr"], "PAT/Earnings Growth (legacy)"),
+            (["revenue_growth", "revenue_cagr", "sales_growth", "topline_growth"], "Revenue Growth (legacy)"),
+        ]
+        for keyword_group, label in growth_keywords_priority:
+            for gkey, gval in guidance.items():
+                gkey_lower = gkey.lower().replace(" ", "_").replace("-", "_")
+                if any(kw in gkey_lower for kw in keyword_group):
+                    numbers = re.findall(r"[\d.]+", str(gval))
+                    if numbers:
+                        try:
+                            val = float(numbers[-1])
+                            if val > 0:
+                                _set_found(val, gkey, label, str(gval), [])
+                                if "revenue" in label.lower():
+                                    assumptions.append(
+                                        "PAT growth guidance not found. Using revenue/CAGR guidance."
+                                    )
+                                break
+                        except (ValueError, IndexError):
+                            continue
+            if suggested is not None:
+                break
+
+    # ===================================================================
+    # Strategy 5: Historical PAT/revenue growth from THIS concall analysis
+    # ===================================================================
     if suggested is None:
-        if analysis.get("pat_growth_yoy_pct") is not None:
-            suggested = abs(analysis["pat_growth_yoy_pct"])
-            source_key = "pat_growth_yoy_pct"
-            source_label = "Historical PAT Growth YoY% (not forward guidance)"
-            source_raw_value = f"{analysis['pat_growth_yoy_pct']:.1f}%"
+        if analysis.get("pat_growth_yoy_pct") is not None and analysis["pat_growth_yoy_pct"] > 0:
+            val = analysis["pat_growth_yoy_pct"]
+            _set_found(round(val, 1), "pat_growth_yoy_pct", "Reported PAT Growth YoY% (backward-looking)", f"{val:.1f}%", [])
             assumptions.append(
-                "No explicit forward guidance found. Using the historically reported "
-                "PAT growth rate as a proxy. This is backward-looking."
+                "No forward guidance found in this concall. Using the reported PAT growth "
+                "rate from this quarter. This is backward-looking — future may differ."
             )
-        else:
+        elif analysis.get("revenue_growth_yoy_pct") is not None and analysis["revenue_growth_yoy_pct"] > 0:
+            val = analysis["revenue_growth_yoy_pct"]
+            _set_found(round(val, 1), "revenue_growth_yoy_pct", "Reported Revenue Growth YoY% (backward-looking)", f"{val:.1f}%", [])
             assumptions.append(
-                "No forward guidance and no historical PAT growth data found. "
-                "Growth rate defaults to 20%. Override with your own research."
+                "No forward guidance found. Using reported revenue growth as proxy. "
+                "This is backward-looking and revenue-based — PAT growth may differ."
             )
+
+    # ===================================================================
+    # Strategy 6: Historical growth from PREVIOUS concalls
+    # ===================================================================
+    if suggested is None:
+        for prev_doc in candidates[1:4]:
+            pa = prev_doc.get("analysis", {})
+            if not pa:
+                continue
+            for field, label in [
+                ("pat_growth_yoy_pct", "PAT Growth YoY%"),
+                ("revenue_growth_yoy_pct", "Revenue Growth YoY%"),
+            ]:
+                val = pa.get(field)
+                if val is not None and val > 0:
+                    prev_q = pa.get("quarter", "prior quarter")
+                    _set_found(round(val, 1), field, f"{label} from {prev_q} (backward-looking)", f"{val:.1f}%", [])
+                    assumptions.append(
+                        f"No forward guidance in latest concall. Using {label} ({val:.1f}%) "
+                        f"from {prev_q}. This is backward-looking."
+                    )
+                    break
+            if suggested is not None:
+                break
+
+    # ===================================================================
+    # Strategy 7: Default 20% — absolute last resort
+    # ===================================================================
+    if suggested is None:
+        assumptions.append(
+            "No forward guidance, no absolute targets, and no historical growth data "
+            "found across all analyzed concalls. Growth rate defaults to 20%. "
+            "Override with your own research."
+        )
 
     if not guidance and not structured:
         assumptions.append(

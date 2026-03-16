@@ -69,6 +69,23 @@ interface ValuationResult {
   overall_phase_label: string;
 }
 
+interface StructuredGuidanceItem {
+  metric: string;
+  metric_label: string;
+  period: string;
+  value_text: string;
+  value_low: number | null;
+  value_high: number | null;
+  unit: string;
+  guidance_type: string;
+  revision: string;
+  revision_detail: string | null;
+  evidence_quote: string;
+  confidence: number;
+  conditions: string | null;
+  segment: string | null;
+}
+
 interface GuidancePrefill {
   suggested_growth: number | null;
   source: string | null;
@@ -81,6 +98,8 @@ interface GuidancePrefill {
   concall_filename: string | null;
   analyzed_at: string | null;
   full_guidance: Record<string, string>;
+  structured_guidance?: StructuredGuidanceItem[];
+  guidance_items_used?: StructuredGuidanceItem[];
   financials_extracted: Record<string, number>;
   tone_score: number | null;
   execution_score: number | null;
@@ -202,8 +221,15 @@ export default function ValuationPage() {
   };
 
   const forwardPeriod = prefill?.forward_period || "Next FY";
-  const hasGuidance = prefill && Object.keys(prefill.full_guidance).length > 0;
+  const hasStructuredGuidance = prefill && prefill.structured_guidance && prefill.structured_guidance.length > 0;
+  const hasGuidance = hasStructuredGuidance || (prefill && Object.keys(prefill.full_guidance).length > 0);
   const hasAssumptions = prefill && prefill.assumptions.length > 0;
+
+  const usedMetrics = new Set(
+    (prefill?.guidance_items_used || []).map(
+      (it) => `${it.metric}|${it.period}`
+    )
+  );
 
   return (
     <>
@@ -353,33 +379,70 @@ export default function ValuationPage() {
                           These are the specific numbers management guided for in the earnings call. The highlighted row is what was used for the growth rate.
                         </p>
                         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                          {Object.entries(prefill.full_guidance).map(([key, val]) => {
-                            const isUsed = key === prefill.source;
-                            return (
-                              <div
-                                key={key}
-                                className={`rounded-lg border px-3 py-2 text-sm ${
-                                  isUsed
-                                    ? "border-emerald-500/30 bg-emerald-500/5"
-                                    : "border-border/30 bg-muted/20"
-                                }`}
-                              >
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="text-xs text-muted-foreground capitalize">
-                                    {key.replace(/_/g, " ")}
-                                  </span>
-                                  {isUsed && (
-                                    <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
-                                      USED
-                                    </Badge>
-                                  )}
-                                </div>
-                                <p className={`text-sm font-medium mt-0.5 ${isUsed ? "text-emerald-400" : "text-foreground"}`}>
-                                  {val}
-                                </p>
-                              </div>
-                            );
-                          })}
+                          {hasStructuredGuidance
+                            ? prefill.structured_guidance!.map((item, idx) => {
+                                const itemKey = `${item.metric}|${item.period}`;
+                                const isUsed = usedMetrics.has(itemKey);
+                                const label = item.segment
+                                  ? `${item.metric_label} (${item.segment})`
+                                  : item.metric_label;
+                                return (
+                                  <div
+                                    key={`${itemKey}-${idx}`}
+                                    className={`rounded-lg border px-3 py-2 text-sm ${
+                                      isUsed
+                                        ? "border-emerald-500/30 bg-emerald-500/5"
+                                        : "border-border/30 bg-muted/20"
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="text-xs text-muted-foreground">
+                                        {label} {item.period}
+                                      </span>
+                                      {isUsed && (
+                                        <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
+                                          USED
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    <p className={`text-sm font-semibold mt-0.5 ${isUsed ? "text-emerald-400" : "text-foreground"}`}>
+                                      {item.value_text}
+                                    </p>
+                                    {item.conditions && (
+                                      <p className="text-[10px] text-amber-400 mt-0.5">
+                                        Condition: {item.conditions}
+                                      </p>
+                                    )}
+                                  </div>
+                                );
+                              })
+                            : Object.entries(prefill.full_guidance).map(([key, val]) => {
+                                const isUsed = key === prefill.source;
+                                return (
+                                  <div
+                                    key={key}
+                                    className={`rounded-lg border px-3 py-2 text-sm ${
+                                      isUsed
+                                        ? "border-emerald-500/30 bg-emerald-500/5"
+                                        : "border-border/30 bg-muted/20"
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="text-xs text-muted-foreground capitalize">
+                                        {key.replace(/_/g, " ")}
+                                      </span>
+                                      {isUsed && (
+                                        <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
+                                          USED
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    <p className={`text-sm font-medium mt-0.5 ${isUsed ? "text-emerald-400" : "text-foreground"}`}>
+                                      {val}
+                                    </p>
+                                  </div>
+                                );
+                              })}
                         </div>
                       </div>
                     )}
