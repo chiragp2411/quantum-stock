@@ -56,7 +56,7 @@ See `backend/docs/gemini-migration-plan.md` for the full roadmap of what's built
 
 ## Current Architecture
 
-### Analysis Pipeline (v5 — Gemini + Ollama fallback)
+### Analysis Pipeline (v6 — Structured Guidance + Gemini)
 
 ```
 PDF Upload
@@ -65,14 +65,32 @@ pdfplumber (text extraction)
   ↓
 ANALYSIS_PROVIDER check
   ├── "gemini" → Gemini 2.5 Flash structured output (single call, ~10-15s)
-  │   └→ ALL fields: summary, highlights, guidance, tone, business model,
-  │      moat, financials, trajectory, contradictions, thesis, capex
+  │   ├→ ALL fields: summary, highlights, tone, business model, moat,
+  │   │   financials, trajectory, contradictions, thesis, capex
+  │   └→ structured_guidance: list[GuidanceItem] — every forward statement
+  │       with metric key, numeric range, revision status, evidence quote
   │
   └── "ollama" (fallback) → SpaCy + regex (<2s) + Ollama summary (~25s)
       └→ Structured data from SpaCy, summary from Ollama
   ↓
 ConCallAnalysis (Pydantic model, 30+ fields) → MongoDB
 ```
+
+### Structured Guidance System (THE HEART)
+
+Every forward-looking management statement is extracted as a `GuidanceItem` with:
+- **Standardized metric key** (revenue_growth, pat_growth, ebitda, etc.) for cross-quarter comparison
+- **Numeric range** (value_low, value_high) — even vague language like "high teens" is mapped to 15-19%
+- **Revision status** (new / raised / maintained / lowered / withdrawn) vs previous quarter
+- **Evidence quote** — exact management text supporting the guidance
+- **Conditions** ("if monsoon is normal") and **segment** ("Retail", "Dubai") when applicable
+- Handles all 15 real-world guidance cases (explicit, vague, conditional, implicit, withdrawal, contradiction, etc.)
+
+This structured data powers:
+- **Tracker table** — categorized display (Growth / Profitability / Operations) instead of chaotic tags
+- **Valuation auto-fill** — direct numeric values instead of regex parsing
+- **Trajectory calculation** — per-metric comparison across quarters
+- **Cross-quarter context** — previous 2 quarters sent to Gemini for revision detection
 
 ### Key Design Decision: Gemini vs Ollama
 
@@ -92,7 +110,7 @@ ConCallAnalysis (Pydantic model, 30+ fields) → MongoDB
 | `backend/app/concalls/llm_analyzer.py` | Ollama fallback: SpaCy structured + Ollama summary |
 | `backend/app/concalls/spacy_preprocessor.py` | SpaCy NER + EntityRuler for financial patterns |
 | `backend/app/concalls/pdf_parser.py` | pdfplumber text extraction |
-| `backend/app/concalls/models.py` | Pydantic models: `ConCallAnalysis` (30+ fields), `GuidanceRow` |
+| `backend/app/concalls/models.py` | Pydantic models: `ConCallAnalysis`, `GuidanceItem` (structured), `GuidanceRow` |
 | `backend/app/concalls/router.py` | API: upload, analyze (queue), delete/clear, tracker, override |
 | `backend/app/stocks/router.py` | Stock search, recent, summary, dashboard-stats |
 | `backend/app/valuation/calculator.py` | 4-phase valuation matrix, scenario math |

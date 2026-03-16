@@ -4,6 +4,90 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
+# ---------------------------------------------------------------------------
+# Standardized metric keys (used by Gemini and cross-quarter comparison)
+# ---------------------------------------------------------------------------
+METRIC_CATEGORIES: dict[str, list[str]] = {
+    "Growth": [
+        "revenue_growth", "pat_growth", "ebitda_growth", "volume_growth",
+        "earnings_cagr", "sssg",
+    ],
+    "Profitability": [
+        "revenue", "ebitda", "pat", "ebitda_margin", "pat_margin",
+        "gross_margin", "roce", "roe",
+    ],
+    "Operations": [
+        "capex", "store_count", "volume", "capacity", "capacity_utilization",
+        "order_book", "market_share", "working_capital_days",
+        "geographic_expansion", "employee_count",
+    ],
+}
+
+METRIC_CATEGORY_LOOKUP: dict[str, str] = {
+    metric: cat
+    for cat, metrics in METRIC_CATEGORIES.items()
+    for metric in metrics
+}
+
+
+class GuidanceItem(BaseModel):
+    """One structured forward-guidance item extracted from a con-call."""
+
+    metric: str = Field(
+        description="Standardized key from taxonomy: revenue_growth, pat_growth, ebitda, "
+        "ebitda_margin, pat, revenue, capex, store_count, volume, sssg, roce, "
+        "working_capital_days, capacity, order_book, etc."
+    )
+    metric_label: str = Field(description="Human-readable label: 'Revenue Growth', 'PAT'")
+    period: str = Field(description="Target period: 'FY27', 'Q4FY26', 'FY28', 'long_term'")
+    value_text: str = Field(
+        description="Raw management language: '₹350 crores+', '25-30%', 'high teens'"
+    )
+    value_low: Optional[float] = Field(
+        default=None, description="Parsed numeric lower bound (25.0 for '25-30%')"
+    )
+    value_high: Optional[float] = Field(
+        default=None, description="Parsed numeric upper bound (30.0 for '25-30%')"
+    )
+    unit: str = Field(
+        default="pct",
+        description="Unit: 'pct', 'cr', 'tons', 'stores', 'days', 'x', 'units'"
+    )
+    guidance_type: str = Field(
+        description="explicit_numeric | vague_range | qualitative | conditional | "
+        "continued | implicit_confirmation | withdrawn"
+    )
+    revision: str = Field(
+        default="unknown",
+        description="new | raised | maintained | lowered | withdrawn | unknown"
+    )
+    revision_detail: Optional[str] = Field(
+        default=None, description="E.g. 'Raised from 25% to 30%'"
+    )
+    evidence_quote: str = Field(
+        default="", description="Exact management quote supporting this guidance"
+    )
+    confidence: float = Field(
+        default=0.8, ge=0.0, le=1.0, description="Extraction confidence"
+    )
+    conditions: Optional[str] = Field(
+        default=None, description="Conditions: 'if monsoon is normal'"
+    )
+    segment: Optional[str] = Field(
+        default=None, description="Business segment: 'Dubai Service Centre', 'Retail'"
+    )
+
+    @property
+    def category(self) -> str:
+        return METRIC_CATEGORY_LOOKUP.get(self.metric, "Other")
+
+    @property
+    def value_mid(self) -> Optional[float]:
+        if self.value_low is not None and self.value_high is not None:
+            return (self.value_low + self.value_high) / 2
+        return self.value_low or self.value_high
+
+
 class ConCallAnalysis(BaseModel):
     """Structured output from LLM analysis of a con-call transcript."""
 
@@ -24,7 +108,12 @@ class ConCallAnalysis(BaseModel):
     )
     guidance: dict[str, str] = Field(
         default_factory=dict,
-        description="Forward guidance with numbers: {'revenue_growth': '25-28%', 'pat_growth': '30%', 'capex': '₹200 cr'}",
+        description="(Legacy) Forward guidance flat dict — kept for backward compat",
+    )
+    structured_guidance: list[GuidanceItem] = Field(
+        default_factory=list,
+        description="Structured forward guidance with standardized metrics, numeric ranges, "
+        "revision status, evidence quotes, and conditions",
     )
     green_flags: list[str] = Field(
         default_factory=list,
@@ -143,6 +232,14 @@ class GuidanceRow(BaseModel):
     trajectory: str = "flat"
     surprise: Optional[str] = Field(default=None, description="Delta vs guidance: e.g. '+3% above guidance'")
     contradictions: list[str] = Field(default_factory=list, description="Cross-quarter contradictions detected")
+    structured_new_guidance: list[GuidanceItem] = Field(
+        default_factory=list,
+        description="Structured guidance items for this quarter (preferred over new_guidance dict)",
+    )
+    structured_prev_guidance: list[GuidanceItem] = Field(
+        default_factory=list,
+        description="Structured guidance from the previous quarter for comparison",
+    )
 
 
 class ManualOverride(BaseModel):

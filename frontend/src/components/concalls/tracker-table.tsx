@@ -20,6 +20,11 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
 import {
   ArrowDown,
@@ -32,8 +37,28 @@ import {
   XCircle,
   MinusCircle,
   Clock,
+  Quote,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { toast } from "sonner";
+
+interface GuidanceItemData {
+  metric: string;
+  metric_label: string;
+  period: string;
+  value_text: string;
+  value_low: number | null;
+  value_high: number | null;
+  unit: string;
+  guidance_type: string;
+  revision: string;
+  revision_detail: string | null;
+  evidence_quote: string;
+  confidence: number;
+  conditions: string | null;
+  segment: string | null;
+}
 
 interface TrackerRow {
   period: string;
@@ -46,6 +71,8 @@ interface TrackerRow {
   surprise?: string | null;
   contradictions?: string[];
   tone_score?: number;
+  structured_new_guidance?: GuidanceItemData[];
+  structured_prev_guidance?: GuidanceItemData[];
 }
 
 interface TrackerTableProps {
@@ -53,6 +80,45 @@ interface TrackerTableProps {
   tracker: TrackerRow[];
   concallIds: Record<string, string>;
   onRefresh: () => void;
+}
+
+const CATEGORY_ORDER = ["Growth", "Profitability", "Operations", "Other"];
+
+const METRIC_TO_CATEGORY: Record<string, string> = {
+  revenue_growth: "Growth",
+  pat_growth: "Growth",
+  ebitda_growth: "Growth",
+  volume_growth: "Growth",
+  earnings_cagr: "Growth",
+  sssg: "Growth",
+  revenue: "Profitability",
+  ebitda: "Profitability",
+  pat: "Profitability",
+  ebitda_margin: "Profitability",
+  pat_margin: "Profitability",
+  gross_margin: "Profitability",
+  roce: "Profitability",
+  roe: "Profitability",
+  capex: "Operations",
+  store_count: "Operations",
+  volume: "Operations",
+  capacity: "Operations",
+  capacity_utilization: "Operations",
+  order_book: "Operations",
+  market_share: "Operations",
+  working_capital_days: "Operations",
+  geographic_expansion: "Operations",
+  employee_count: "Operations",
+};
+
+function categorizeItems(items: GuidanceItemData[]): Record<string, GuidanceItemData[]> {
+  const groups: Record<string, GuidanceItemData[]> = {};
+  for (const item of items) {
+    const cat = METRIC_TO_CATEGORY[item.metric] || "Other";
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(item);
+  }
+  return groups;
 }
 
 export function TrackerTable({
@@ -91,71 +157,14 @@ export function TrackerTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {tracker.map((row, idx) => (
-              <React.Fragment key={row.period}>
-                <TableRow className="group">
-                  <TableCell className="font-semibold text-sm">
-                    <div className="flex flex-col gap-0.5">
-                      <span>{row.period}</span>
-                      {row.tone_score != null && (
-                        <span className={`text-[10px] font-medium tabular-nums ${
-                          row.tone_score >= 7 ? "text-emerald-400" : row.tone_score >= 4 ? "text-blue-400" : "text-red-400"
-                        }`}>
-                          Tone: {row.tone_score}/10
-                        </span>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <GuidanceChips data={row.prev_guidance} />
-                  </TableCell>
-                  <TableCell>
-                    <GuidanceChips data={row.actuals} />
-                  </TableCell>
-                  <TableCell>
-                    <MetBadge status={row.met_missed} />
-                  </TableCell>
-                  <TableCell>
-                    <GuidanceChips data={row.new_guidance} variant="new" />
-                  </TableCell>
-                  <TableCell>
-                    <TrajectoryBadge direction={row.trajectory} />
-                  </TableCell>
-                  <TableCell>
-                    <OverrideDialog
-                      symbol={symbol}
-                      period={row.period}
-                      concallId={concallIds[row.period]}
-                      onDone={onRefresh}
-                    />
-                  </TableCell>
-                </TableRow>
-
-                {(row.surprise || (row.contradictions && row.contradictions.length > 0)) && (
-                  <TableRow className="border-t-0 bg-muted/15">
-                    <TableCell colSpan={7} className="py-2.5 pl-8">
-                      <div className="flex flex-col gap-2">
-                        {row.surprise && (
-                          <div className="flex items-start gap-2 text-xs text-muted-foreground">
-                            <span className="text-blue-400 font-medium shrink-0">Surprise:</span>
-                            <span className="italic">{row.surprise}</span>
-                          </div>
-                        )}
-                        {row.contradictions && row.contradictions.length > 0 && (
-                          <div className="flex flex-wrap items-start gap-1.5">
-                            <AlertTriangle className="h-3 w-3 text-amber-400 mt-0.5 shrink-0" />
-                            {row.contradictions.map((c, i) => (
-                              <Badge key={i} variant="outline" className="text-[10px] bg-amber-500/8 text-amber-400 border-amber-500/15 font-normal">
-                                {c}
-                              </Badge>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                )}
-              </React.Fragment>
+            {tracker.map((row) => (
+              <TrackerRowComponent
+                key={row.period}
+                row={row}
+                symbol={symbol}
+                concallId={concallIds[row.period]}
+                onRefresh={onRefresh}
+              />
             ))}
           </TableBody>
         </Table>
@@ -164,27 +173,275 @@ export function TrackerTable({
   );
 }
 
-function GuidanceChips({ data, variant = "default" }: { data: Record<string, string>; variant?: "default" | "new" }) {
-  const entries = Object.entries(data);
-  if (entries.length === 0) {
-    return <span className="text-xs text-muted-foreground/50">—</span>;
-  }
+function TrackerRowComponent({
+  row,
+  symbol,
+  concallId,
+  onRefresh,
+}: {
+  row: TrackerRow;
+  symbol: string;
+  concallId?: string;
+  onRefresh: () => void;
+}) {
+  const hasStructured = row.structured_new_guidance && row.structured_new_guidance.length > 0;
+  const hasPrevStructured = row.structured_prev_guidance && row.structured_prev_guidance.length > 0;
+
   return (
-    <div className="flex flex-wrap gap-1">
-      {entries.map(([key, val]) => (
-        <Badge
-          key={key}
-          variant="outline"
-          className={`text-[11px] font-normal ${
-            variant === "new" ? "bg-emerald-500/8 border-emerald-500/15 text-emerald-400" : ""
-          }`}
+    <React.Fragment>
+      <TableRow className="group align-top">
+        <TableCell className="font-semibold text-sm">
+          <div className="flex flex-col gap-0.5">
+            <span>{row.period}</span>
+            {row.tone_score != null && (
+              <span className={`text-[10px] font-medium tabular-nums ${
+                row.tone_score >= 7 ? "text-emerald-400" : row.tone_score >= 4 ? "text-blue-400" : "text-red-400"
+              }`}>
+                Tone: {row.tone_score}/10
+              </span>
+            )}
+          </div>
+        </TableCell>
+        <TableCell>
+          {hasPrevStructured ? (
+            <StructuredGuidanceDisplay items={row.structured_prev_guidance!} compact />
+          ) : (
+            <LegacyGuidanceChips data={row.prev_guidance} />
+          )}
+        </TableCell>
+        <TableCell>
+          <LegacyGuidanceChips data={row.actuals} />
+        </TableCell>
+        <TableCell>
+          <MetBadge status={row.met_missed} />
+        </TableCell>
+        <TableCell>
+          {hasStructured ? (
+            <StructuredGuidanceDisplay items={row.structured_new_guidance!} />
+          ) : (
+            <LegacyGuidanceChips data={row.new_guidance} variant="new" />
+          )}
+        </TableCell>
+        <TableCell>
+          <TrajectoryBadge direction={row.trajectory} />
+        </TableCell>
+        <TableCell>
+          <OverrideDialog
+            symbol={symbol}
+            period={row.period}
+            concallId={concallId}
+            onDone={onRefresh}
+          />
+        </TableCell>
+      </TableRow>
+
+      {(row.surprise || (row.contradictions && row.contradictions.length > 0)) && (
+        <TableRow className="border-t-0 bg-muted/15">
+          <TableCell colSpan={7} className="py-2.5 pl-8">
+            <div className="flex flex-col gap-2">
+              {row.surprise && (
+                <div className="flex items-start gap-2 text-xs text-muted-foreground">
+                  <span className="text-blue-400 font-medium shrink-0">Surprise:</span>
+                  <span className="italic">{row.surprise}</span>
+                </div>
+              )}
+              {row.contradictions && row.contradictions.length > 0 && (
+                <div className="flex flex-wrap items-start gap-1.5">
+                  <AlertTriangle className="h-3 w-3 text-amber-400 mt-0.5 shrink-0" />
+                  {row.contradictions.map((c, i) => (
+                    <span key={i} className="text-xs text-amber-400">
+                      {c}{i < row.contradictions!.length - 1 ? " · " : ""}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </TableCell>
+        </TableRow>
+      )}
+    </React.Fragment>
+  );
+}
+
+
+function StructuredGuidanceDisplay({
+  items,
+  compact = false,
+}: {
+  items: GuidanceItemData[];
+  compact?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const grouped = categorizeItems(items);
+  const totalItems = items.length;
+  const showToggle = totalItems > 4 && !compact;
+  const visibleLimit = expanded || compact ? Infinity : 4;
+  let rendered = 0;
+
+  return (
+    <div className="space-y-2 min-w-[200px]">
+      {CATEGORY_ORDER.map((cat) => {
+        const catItems = grouped[cat];
+        if (!catItems || catItems.length === 0) return null;
+
+        const itemsToShow: GuidanceItemData[] = [];
+        for (const item of catItems) {
+          if (rendered >= visibleLimit) break;
+          itemsToShow.push(item);
+          rendered++;
+        }
+        if (itemsToShow.length === 0) return null;
+
+        return (
+          <div key={cat}>
+            {!compact && (
+              <div className="text-[9px] font-bold text-muted-foreground/50 uppercase tracking-widest mb-1">
+                {cat}
+              </div>
+            )}
+            <div className="space-y-0.5">
+              {itemsToShow.map((item, idx) => (
+                <GuidanceItemRow key={`${item.metric}-${item.period}-${idx}`} item={item} compact={compact} />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      {showToggle && (
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
         >
-          <span className="capitalize font-medium">{key.replace(/_/g, " ")}:</span>&nbsp;{val}
-        </Badge>
-      ))}
+          {expanded ? (
+            <>
+              <ChevronUp className="h-3 w-3" />
+              Show less
+            </>
+          ) : (
+            <>
+              <ChevronDown className="h-3 w-3" />
+              Show all {totalItems} items
+            </>
+          )}
+        </button>
+      )}
     </div>
   );
 }
+
+function GuidanceItemRow({ item, compact }: { item: GuidanceItemData; compact?: boolean }) {
+  const label = item.segment
+    ? `${item.metric_label} (${item.segment})`
+    : item.metric_label;
+
+  return (
+    <div className="flex items-center gap-2 text-xs group/row">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="text-muted-foreground truncate max-w-[140px] cursor-help">
+            {label}
+            {!compact && item.period && (
+              <span className="text-muted-foreground/40 ml-1">{item.period}</span>
+            )}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-sm">
+          <div className="space-y-1">
+            <p className="font-medium">{label} — {item.period}</p>
+            <p className="text-xs">Value: {item.value_text}</p>
+            {item.conditions && (
+              <p className="text-xs text-amber-400">Condition: {item.conditions}</p>
+            )}
+            {item.revision_detail && (
+              <p className="text-xs text-blue-400">{item.revision_detail}</p>
+            )}
+            {item.evidence_quote && (
+              <div className="flex items-start gap-1 text-xs text-muted-foreground mt-1 border-t border-border/30 pt-1">
+                <Quote className="h-3 w-3 shrink-0 mt-0.5" />
+                <span className="italic">&ldquo;{item.evidence_quote}&rdquo;</span>
+              </div>
+            )}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+      <span className="font-semibold text-foreground tabular-nums whitespace-nowrap">
+        {item.value_text}
+      </span>
+      {!compact && <RevisionBadge revision={item.revision} type={item.guidance_type} />}
+    </div>
+  );
+}
+
+function RevisionBadge({ revision, type }: { revision: string; type: string }) {
+  if (type === "withdrawn" || revision === "withdrawn") {
+    return (
+      <Badge variant="outline" className="text-[8px] px-1 py-0 h-4 bg-red-500/5 text-red-400 border-red-500/15">
+        WITHDRAWN
+      </Badge>
+    );
+  }
+  if (revision === "raised") {
+    return (
+      <span className="flex items-center gap-0.5 text-emerald-500">
+        <ArrowUp className="h-3 w-3" />
+        <span className="text-[9px] font-semibold">UP</span>
+      </span>
+    );
+  }
+  if (revision === "lowered") {
+    return (
+      <span className="flex items-center gap-0.5 text-red-400">
+        <ArrowDown className="h-3 w-3" />
+        <span className="text-[9px] font-semibold">DOWN</span>
+      </span>
+    );
+  }
+  if (revision === "maintained") {
+    return (
+      <span className="flex items-center gap-0.5 text-muted-foreground/50">
+        <ArrowRight className="h-3 w-3" />
+        <span className="text-[9px] font-medium">HELD</span>
+      </span>
+    );
+  }
+  if (revision === "new") {
+    return (
+      <Badge variant="outline" className="text-[8px] px-1 py-0 h-4 bg-blue-500/5 text-blue-400 border-blue-500/15">
+        NEW
+      </Badge>
+    );
+  }
+  return null;
+}
+
+function LegacyGuidanceChips({ data, variant = "default" }: { data: Record<string, string>; variant?: "default" | "new" }) {
+  const entries = Object.entries(data);
+  if (entries.length === 0) {
+    return <span className="text-xs text-muted-foreground/50">&mdash;</span>;
+  }
+  return (
+    <div className="space-y-0.5 min-w-[160px]">
+      {entries.slice(0, 6).map(([key, val]) => (
+        <div key={key} className="flex items-center gap-1.5 text-xs">
+          <span className="text-muted-foreground truncate max-w-[120px] capitalize">
+            {key.replace(/_/g, " ")}
+          </span>
+          <span className={`font-medium tabular-nums whitespace-nowrap ${
+            variant === "new" ? "text-emerald-400" : "text-foreground"
+          }`}>
+            {val}
+          </span>
+        </div>
+      ))}
+      {entries.length > 6 && (
+        <span className="text-[10px] text-muted-foreground/40">
+          +{entries.length - 6} more
+        </span>
+      )}
+    </div>
+  );
+}
+
 
 function MetBadge({ status }: { status: string }) {
   if (status === "met") {

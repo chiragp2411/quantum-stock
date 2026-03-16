@@ -35,7 +35,10 @@ def _doc_to_dict(doc: dict) -> dict:
 
 
 def _get_prev_analysis_json(symbol: str, current_doc_id: ObjectId) -> Optional[str]:
-    """Get the previous quarter's analysis JSON for cross-quarter comparison."""
+    """Get previous 2 quarters' analysis JSON for cross-quarter comparison.
+
+    Sends structured_guidance when available so Gemini can compute revisions.
+    """
     import json
 
     col = concalls_col()
@@ -47,11 +50,18 @@ def _get_prev_analysis_json(symbol: str, current_doc_id: ObjectId) -> Optional[s
             "_id": {"$ne": current_doc_id},
         })
         .sort("uploaded_at", -1)
-        .limit(1)
+        .limit(2)
     )
-    if prev_docs and prev_docs[0].get("analysis"):
-        prev = prev_docs[0]["analysis"]
-        subset = {
+
+    if not prev_docs:
+        return None
+
+    quarters: list[dict] = []
+    for doc in prev_docs:
+        prev = doc.get("analysis", {})
+        if not prev:
+            continue
+        subset: dict = {
             "quarter": prev.get("quarter"),
             "guidance": prev.get("guidance", {}),
             "tone_score": prev.get("tone_score"),
@@ -59,8 +69,22 @@ def _get_prev_analysis_json(symbol: str, current_doc_id: ObjectId) -> Optional[s
             "guidance_trajectory": prev.get("guidance_trajectory"),
             "investment_thesis": prev.get("investment_thesis", []),
         }
-        return json.dumps(subset, default=str)
-    return None
+        sg = prev.get("structured_guidance")
+        if sg:
+            subset["structured_guidance"] = [
+                {k: item.get(k) for k in (
+                    "metric", "metric_label", "period", "value_text",
+                    "value_low", "value_high", "unit", "guidance_type",
+                    "revision", "segment",
+                )}
+                for item in (sg if isinstance(sg, list) else [])
+            ]
+        quarters.append(subset)
+
+    if not quarters:
+        return None
+
+    return json.dumps(quarters, default=str)
 
 
 def _analyze_single_concall(doc_id: ObjectId, symbol: str) -> None:
@@ -380,9 +404,11 @@ def guidance_tracker(symbol: str):
         quarter = analysis.get("quarter", cc.get("quarter", f"Q{i+1}"))
 
         prev_guidance = {}
+        prev_structured: list[dict] = []
         if i > 0:
             prev_analysis = concalls[i - 1].get("analysis", {})
             prev_guidance = prev_analysis.get("guidance", {})
+            prev_structured = prev_analysis.get("structured_guidance", [])
 
         actuals = financials.get(quarter, {})
         actual_data = {}
@@ -405,6 +431,8 @@ def guidance_tracker(symbol: str):
         if gemini_trajectory:
             trajectory = gemini_trajectory
 
+        current_structured = analysis.get("structured_guidance", [])
+
         rows.append(
             GuidanceRow(
                 period=quarter,
@@ -416,6 +444,8 @@ def guidance_tracker(symbol: str):
                 trajectory=trajectory,
                 surprise=surprise if surprise else None,
                 contradictions=gemini_contradictions,
+                structured_new_guidance=current_structured,
+                structured_prev_guidance=prev_structured,
             ).model_dump()
         )
 

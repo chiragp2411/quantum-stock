@@ -168,6 +168,7 @@ def guidance_prefill(symbol: str):
 
     analysis = latest["analysis"]
     guidance = analysis.get("guidance", {})
+    structured = analysis.get("structured_guidance", [])
     trajectory = analysis.get("guidance_trajectory")
     quarter = analysis.get("quarter", latest.get("quarter", ""))
 
@@ -183,68 +184,118 @@ def guidance_prefill(symbol: str):
 
     suggested = None
     source_key = None
+    source_label = None
     source_raw_value = None
     assumptions: list[str] = []
+    guidance_items_used: list[dict] = []
 
-    priority_fields = [
-        ("pat_growth", "PAT Growth (management guidance)"),
-        ("pat_growth_pct", "PAT Growth % (management guidance)"),
-        ("pat", "PAT (management guidance)"),
-        ("earnings_growth", "Earnings Growth (management guidance)"),
-        ("revenue_growth", "Revenue Growth (management guidance)"),
-    ]
+    fwd_period = _forward_period(quarter)
 
-    for key, label in priority_fields:
-        val = guidance.get(key, "")
-        if not val:
-            continue
-        numbers = re.findall(r"[\d.]+", str(val))
-        if numbers:
-            try:
-                suggested = float(numbers[-1])
-                source_key = key
-                source_raw_value = str(val)
-                break
-            except (ValueError, IndexError):
+    # --- Strategy 1: Use structured_guidance (preferred — direct numeric values) ---
+    if structured:
+        priority_metrics = [
+            ("pat_growth", "PAT Growth"),
+            ("ebitda_growth", "EBITDA Growth"),
+            ("earnings_cagr", "Earnings CAGR"),
+            ("revenue_growth", "Revenue Growth"),
+        ]
+
+        for metric_key, label in priority_metrics:
+            matching = [
+                item for item in structured
+                if isinstance(item, dict)
+                and item.get("metric") == metric_key
+                and item.get("unit") == "pct"
+                and item.get("guidance_type") != "withdrawn"
+            ]
+            if not matching:
                 continue
 
-    if suggested is not None:
-        source_label = next(
-            (label for k, label in priority_fields if k == source_key), source_key
-        )
-        if source_key and "revenue" in source_key:
+            best = matching[0]
+            val_high = best.get("value_high")
+            val_low = best.get("value_low")
+            val = val_high or val_low
+            if val is not None and val > 0:
+                suggested = float(val)
+                source_key = metric_key
+                source_label = f"{label} (management guidance — {best.get('guidance_type', 'explicit')})"
+                source_raw_value = best.get("value_text", "")
+                guidance_items_used.append(best)
+
+                if metric_key == "revenue_growth":
+                    assumptions.append(
+                        "PAT growth guidance was not available. Using revenue growth "
+                        "as a proxy — actual PAT growth may differ depending on margin changes."
+                    )
+                if best.get("guidance_type") == "vague_range":
+                    assumptions.append(
+                        f"Management used vague language (\"{best.get('value_text')}\"). "
+                        f"System estimated {val_low}-{val_high}% range; using upper bound."
+                    )
+                if best.get("conditions"):
+                    assumptions.append(
+                        f"This guidance is conditional: \"{best['conditions']}\""
+                    )
+                if best.get("revision") == "lowered":
+                    assumptions.append(
+                        "Guidance was LOWERED compared to the previous quarter. "
+                        f"{best.get('revision_detail', '')}"
+                    )
+                break
+
+    # --- Strategy 2: Fall back to legacy guidance dict ---
+    if suggested is None and guidance:
+        legacy_priority = [
+            ("pat_growth", "PAT Growth (legacy guidance)"),
+            ("pat_growth_pct", "PAT Growth % (legacy guidance)"),
+            ("pat", "PAT (legacy guidance)"),
+            ("earnings_growth", "Earnings Growth (legacy guidance)"),
+            ("revenue_growth", "Revenue Growth (legacy guidance)"),
+        ]
+
+        for key, label in legacy_priority:
+            val = guidance.get(key, "")
+            if not val:
+                continue
+            numbers = re.findall(r"[\d.]+", str(val))
+            if numbers:
+                try:
+                    suggested = float(numbers[-1])
+                    source_key = key
+                    source_label = label
+                    source_raw_value = str(val)
+                    break
+                except (ValueError, IndexError):
+                    continue
+
+        if suggested is not None and source_key and "revenue" in source_key:
             assumptions.append(
                 "PAT growth guidance was not available in this con-call. "
-                "Using revenue growth as a proxy — actual PAT growth may differ "
-                "depending on margin expansion/compression."
+                "Using revenue growth as a proxy — actual PAT growth may differ."
             )
-    else:
+
+    # --- Strategy 3: Fall back to historical PAT growth ---
+    if suggested is None:
         if analysis.get("pat_growth_yoy_pct") is not None:
             suggested = abs(analysis["pat_growth_yoy_pct"])
             source_key = "pat_growth_yoy_pct"
             source_label = "Historical PAT Growth YoY% (not forward guidance)"
             source_raw_value = f"{analysis['pat_growth_yoy_pct']:.1f}%"
             assumptions.append(
-                "No explicit forward guidance found in the con-call. "
-                "Using the historically reported PAT growth rate as a proxy. "
-                "This is backward-looking — actual future growth may differ."
+                "No explicit forward guidance found. Using the historically reported "
+                "PAT growth rate as a proxy. This is backward-looking."
             )
         else:
-            source_label = None
             assumptions.append(
                 "No forward guidance and no historical PAT growth data found. "
-                "Growth rate defaults to 20%. You should enter a growth rate "
-                "based on your own research or the company's investor presentation."
+                "Growth rate defaults to 20%. Override with your own research."
             )
 
-    if not guidance:
+    if not guidance and not structured:
         assumptions.append(
-            "The AI could not extract any forward guidance metrics from this "
-            "con-call transcript. This may mean management did not provide "
-            "specific numerical guidance, or the transcript quality was poor."
+            "The AI could not extract any forward guidance from this con-call. "
+            "Management may not have provided specific numbers."
         )
-
-    fwd_period = _forward_period(quarter)
 
     return {
         "symbol": symbol,
@@ -263,6 +314,8 @@ def guidance_prefill(symbol: str):
             else None
         ),
         "full_guidance": guidance,
+        "structured_guidance": structured,
+        "guidance_items_used": guidance_items_used,
         "financials_extracted": financials_extracted,
         "tone_score": analysis.get("tone_score"),
         "execution_score": analysis.get("management_execution_score"),

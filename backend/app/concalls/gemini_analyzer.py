@@ -12,9 +12,13 @@ from google import genai
 from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.concalls.models import ConCallAnalysis
+from app.concalls.models import ConCallAnalysis, GuidanceItem
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# System prompt — the master instruction set for Gemini
+# ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = """You are an expert Indian equity research analyst producing institutional-grade
 conference call analysis for NSE/BSE-listed companies. Your output should match the quality and
@@ -60,12 +64,114 @@ WHAT MAKES A GREAT SUMMARY:
 - Identifies what's NEW this quarter vs maintained from prior guidance
 - Notes any contradictions or notable Q&A exchanges
 
+=== STRUCTURED GUIDANCE EXTRACTION (CRITICAL — this is the most important analytical output) ===
+
+The structured_guidance field must capture EVERY forward-looking statement management makes.
+This is the core of the investment decision system. Follow these rules precisely:
+
+STANDARDIZED METRIC KEYS (always use these exact strings):
+  revenue_growth, pat_growth, ebitda_growth, volume_growth, earnings_cagr, sssg,
+  revenue, ebitda, pat, ebitda_margin, pat_margin, gross_margin, roce, roe,
+  capex, store_count, volume, capacity, capacity_utilization, order_book,
+  market_share, working_capital_days, geographic_expansion, employee_count
+
+If a guidance item does not fit any key above, use a descriptive snake_case key.
+For segment-specific guidance, use the SAME metric key but fill the "segment" field.
+
+VAGUE LANGUAGE → NUMERIC MAPPING (you MUST convert these):
+  "high teens"          → value_low=15, value_high=19, unit=pct
+  "mid-teens"           → value_low=14, value_high=16, unit=pct
+  "low teens"           → value_low=11, value_high=13, unit=pct
+  "low double digits"   → value_low=10, value_high=13, unit=pct
+  "strong double-digit" → value_low=15, value_high=25, unit=pct
+  "mid-to-high teens"   → value_low=14, value_high=19, unit=pct
+  "low-20s"             → value_low=20, value_high=23, unit=pct
+  "upper single digits" → value_low=7, value_high=9, unit=pct
+  "high single digits"  → value_low=7, value_high=9, unit=pct
+  "mid single digits"   → value_low=4, value_high=6, unit=pct
+  "double revenue in 3 years" → metric=revenue_growth, value_low=26, value_high=26, unit=pct (CAGR)
+  "triple in 5 years"   → value_low=24, value_high=25, unit=pct (CAGR)
+  For any other vague expression, estimate a reasonable numeric range and set guidance_type="vague_range".
+
+ALL 15 GUIDANCE CASES — you must handle each correctly:
+
+Case 1 — EXPLICIT NUMERIC: "We expect 20-25% sales growth in FY26."
+  → guidance_type="explicit_numeric", value_low=20, value_high=25, unit=pct
+
+Case 2 — NO NEW GUIDANCE (continuation): "We remain on track with our earlier guidance" or management gives no numbers.
+  → guidance_type="continued", revision="maintained"
+  → Copy the PREVIOUS quarter's guidance values into value_low/value_high.
+  → evidence_quote must capture the "on track" or similar statement.
+
+Case 3 — RAISED OR LOWERED: "We are now targeting 30% instead of 25%."
+  → guidance_type="explicit_numeric", revision="raised" or "lowered"
+  → revision_detail="Raised from 25% to 30%"
+
+Case 4 — VAGUE RANGE: "high teens", "mid-teens", "low double digits"
+  → guidance_type="vague_range", map to numeric range using table above.
+
+Case 5 — QUALITATIVE ONLY: "robust demand", "strong growth expected"
+  → guidance_type="qualitative", value_low=null, value_high=null
+  → value_text captures the exact language.
+
+Case 6 — CONDITIONAL: "15-20% if monsoon is normal"
+  → guidance_type="conditional", conditions="if monsoon is normal"
+  → Still fill value_low/value_high with the numbers.
+
+Case 7 — IMPLICIT CONFIRMATION: Analyst asks "Is 25% reasonable?" Management: "Yes, comfortable."
+  → guidance_type="implicit_confirmation"
+  → evidence_quote must capture BOTH the question and answer.
+
+Case 8 — SEGMENT-WISE: "Retail 25%, Manufacturing 15%"
+  → Create SEPARATE GuidanceItem entries for each segment.
+  → Same metric key, different segment field.
+
+Case 9 — HISTORICAL CONTINUATION: "committed to our long-term 25% CAGR target"
+  → guidance_type="continued", period="long_term"
+
+Case 10 — LANGUAGE SHIFT without numbers: Tone more cautious/confident but no number change.
+  → If previous guidance exists, guidance_type="continued", revision="maintained"
+  → Note the shift in revision_detail, e.g. "Tone more cautious but numbers unchanged"
+
+Case 11 — WITHDRAWAL: "not giving guidance due to uncertainty"
+  → guidance_type="withdrawn", revision="withdrawn"
+  → value_low=null, value_high=null
+
+Case 12 — CONTRADICTION with previous call: "Said on track last quarter, now says delayed."
+  → Flag in the contradictions list AND in revision_detail.
+  → revision="lowered" if the contradiction implies downward revision.
+
+Case 13 — TIME-BOUND without %: "aim to double revenue in 3 years"
+  → Convert to CAGR: doubling in 3 years ≈ 26% CAGR.
+  → guidance_type="explicit_numeric", period="long_term"
+
+Case 14 — CHANGE IN FOCUS: Last quarter revenue guidance, this quarter margin/capex focus.
+  → Create items for the NEW metrics being guided.
+  → If old metrics are NOT mentioned, do NOT create continued items — only create items for what was actually discussed.
+
+Case 15 — COMBINATION: Multiple cases in one call.
+  → Create separate GuidanceItem entries for each, each with its own type/revision.
+
+REVISION DETERMINATION:
+- If previous quarter guidance is provided in context, compare values.
+  If current value > previous value → revision="raised"
+  If current value < previous value → revision="lowered"
+  If approximately same → revision="maintained"
+  If no previous guidance for this metric → revision="new"
+  If guidance withdrawn → revision="withdrawn"
+- If NO previous guidance context is available, set revision="new" for all items.
+
+EVIDENCE QUOTES:
+- EVERY GuidanceItem MUST have an evidence_quote with the exact text from the transcript.
+- For implicit confirmations, include the analyst question AND management response.
+- Keep quotes concise (1-3 sentences) but complete enough to verify the guidance.
+
 === OTHER FIELD EXTRACTION RULES ===
 
 1. All monetary amounts in ₹ crore (cr). All percentages as whole numbers.
 2. Every highlight MUST contain specific numbers from the transcript — no generic statements.
-3. Guidance = ONLY management's own forward-looking statements WITH numbers.
-   Distinguish management's own guidance from analyst questions/estimates.
+3. The legacy "guidance" dict: still fill it with the top 5-8 most important guidance items as simple
+   key-value strings for backward compatibility. Use descriptive keys.
 4. Tone score meaning:
    - 8-10: Management is specific, confident, gives numbers freely, addresses tough questions openly
    - 5-7: Mixed signals, some hedging but generally positive
@@ -87,6 +193,34 @@ WHAT MAKES A GREAT SUMMARY:
 12. Guidance trajectory: assess whether guidance is being raised, maintained, or cut vs previous quarter"""
 
 
+# ---------------------------------------------------------------------------
+# Gemini structured output schema
+# ---------------------------------------------------------------------------
+
+class _GeminiGuidanceItem(BaseModel):
+    """Structured guidance item for Gemini to fill."""
+    metric: str = Field(description="Standardized metric key from taxonomy")
+    metric_label: str = Field(description="Human-readable: 'Revenue Growth', 'PAT', 'EBITDA Margin'")
+    period: str = Field(description="FY27, Q4FY26, FY28, long_term")
+    value_text: str = Field(description="Raw management text: '₹350 cr+', '25-30%', 'high teens'")
+    value_low: Optional[float] = Field(default=None, description="Numeric lower bound")
+    value_high: Optional[float] = Field(default=None, description="Numeric upper bound")
+    unit: str = Field(default="pct", description="pct, cr, tons, stores, days, x, units")
+    guidance_type: str = Field(
+        description="explicit_numeric | vague_range | qualitative | conditional | "
+        "continued | implicit_confirmation | withdrawn"
+    )
+    revision: str = Field(
+        default="new",
+        description="new | raised | maintained | lowered | withdrawn | unknown"
+    )
+    revision_detail: Optional[str] = Field(default=None, description="E.g. 'Raised from 25% to 30%'")
+    evidence_quote: str = Field(default="", description="Exact management quote supporting this")
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    conditions: Optional[str] = Field(default=None, description="Conditional clause if any")
+    segment: Optional[str] = Field(default=None, description="Business segment if applicable")
+
+
 class _GeminiAnalysisSchema(BaseModel):
     """Schema sent to Gemini for structured output. Mirrors ConCallAnalysis fields."""
 
@@ -98,7 +232,14 @@ class _GeminiAnalysisSchema(BaseModel):
     )
     highlights: list[str] = Field(description="8-12 quantitative takeaways, each with specific numbers from the transcript")
     tone_score: int = Field(ge=1, le=10, description="1-10 management confidence and transparency score")
-    guidance: dict[str, str] = Field(description="Forward guidance by metric with numbers: {'revenue_growth': '25-28%', 'capex': '₹200 cr FY27'}")
+    guidance: dict[str, str] = Field(
+        description="Legacy flat guidance dict with top 5-8 items: {'revenue_growth': '25-28%', 'capex': '₹200 cr FY27'}"
+    )
+    structured_guidance: list[_GeminiGuidanceItem] = Field(
+        description="Complete structured guidance: every forward-looking item with standardized metrics, "
+        "numeric ranges, revision status (new/raised/maintained/lowered/withdrawn), evidence quotes, "
+        "and conditions. Handle all 15 guidance cases. This is the MOST CRITICAL analytical output."
+    )
     green_flags: list[str] = Field(description="3-6 specific positive business signals with evidence")
     red_flags: list[str] = Field(description="1-6 specific warning signals with evidence")
     management_execution_score: int = Field(ge=1, le=10, description="1-10 delivery on past promises")
@@ -106,9 +247,9 @@ class _GeminiAnalysisSchema(BaseModel):
     lynch_category: str = Field(description="Fast Grower / Stalwart / Slow Grower / Cyclical / Turnaround")
     confidence: float = Field(ge=0.0, le=1.0, description="Extraction confidence 0-1")
 
-    business_model: Optional[str] = Field(default=None, description="2-3 sentence business description: what they do, who pays, how they earn")
-    moat_signals: list[str] = Field(default_factory=list, description="Specific evidence of competitive advantage from the call")
-    competitive_advantages: list[str] = Field(default_factory=list, description="What keeps competitors out — with evidence")
+    business_model: Optional[str] = Field(default=None, description="2-3 sentence business description")
+    moat_signals: list[str] = Field(default_factory=list, description="Evidence of competitive advantage")
+    competitive_advantages: list[str] = Field(default_factory=list, description="What keeps competitors out")
 
     revenue_cr: Optional[float] = Field(default=None, description="Revenue ₹ crore this quarter")
     ebitda_cr: Optional[float] = Field(default=None, description="EBITDA ₹ crore")
@@ -118,17 +259,21 @@ class _GeminiAnalysisSchema(BaseModel):
     revenue_growth_yoy_pct: Optional[float] = Field(default=None, description="Revenue YoY growth %")
     pat_growth_yoy_pct: Optional[float] = Field(default=None, description="PAT YoY growth %")
 
-    guidance_trajectory: Optional[str] = Field(default=None, description="up / down / flat based on guidance revision direction")
-    guidance_trajectory_detail: Optional[str] = Field(default=None, description="Narrative: e.g. 'Revenue guidance raised from 25% to 30%'")
-    contradictions: list[str] = Field(default_factory=list, description="Cross-quarter contradictions if previous analysis provided")
+    guidance_trajectory: Optional[str] = Field(default=None, description="up / down / flat")
+    guidance_trajectory_detail: Optional[str] = Field(default=None, description="Narrative of trajectory")
+    contradictions: list[str] = Field(default_factory=list, description="Cross-quarter contradictions")
 
-    capex_plans: list[str] = Field(default_factory=list, description="Capex with ₹ amounts, timelines, and locations")
-    capacity_utilization: Optional[str] = Field(default=None, description="Capacity utilization % if mentioned")
-    geographic_expansion: list[str] = Field(default_factory=list, description="New geographies, states, markets being entered")
+    capex_plans: list[str] = Field(default_factory=list, description="Capex with amounts and timelines")
+    capacity_utilization: Optional[str] = Field(default=None, description="Capacity utilization %")
+    geographic_expansion: list[str] = Field(default_factory=list, description="New geographies")
 
-    investment_thesis: list[str] = Field(default_factory=list, description="Exactly 3 bullets: growth case, key risks, exit trigger")
-    sector_best_pick_rationale: Optional[str] = Field(default=None, description="Is this the best car in its sector? Why or why not?")
+    investment_thesis: list[str] = Field(default_factory=list, description="3 bullets: growth case, risks, exit trigger")
+    sector_best_pick_rationale: Optional[str] = Field(default=None, description="Best car in sector?")
 
+
+# ---------------------------------------------------------------------------
+# Main analysis function
+# ---------------------------------------------------------------------------
 
 def analyze_concall_gemini(
     text: str,
@@ -187,11 +332,12 @@ def analyze_concall_gemini(
     analysis = ConCallAnalysis(**fields)
 
     logger.info(
-        "Gemini analysis complete: quarter=%s, tone=%d, highlights=%d, guidance=%d, "
-        "thesis=%d, summary=%d chars",
+        "Gemini analysis complete: quarter=%s, tone=%d, highlights=%d, "
+        "structured_guidance=%d, legacy_guidance=%d, thesis=%d, summary=%d chars",
         analysis.quarter,
         analysis.tone_score,
         len(analysis.highlights),
+        len(analysis.structured_guidance),
         len(analysis.guidance),
         len(analysis.investment_thesis),
         len(analysis.detailed_summary),
@@ -199,6 +345,10 @@ def analyze_concall_gemini(
 
     return analysis
 
+
+# ---------------------------------------------------------------------------
+# Prompt builder
+# ---------------------------------------------------------------------------
 
 def _build_user_prompt(
     text: str,
@@ -221,12 +371,21 @@ def _build_user_prompt(
 
     if prev_analysis_json:
         parts.append(f"""
-PREVIOUS QUARTER ANALYSIS (use this to track guidance fulfillment and detect contradictions):
+PREVIOUS QUARTERS ANALYSIS (use this to track guidance fulfillment, revisions, and contradictions):
 {prev_analysis_json}
 
-For each metric in the previous quarter's guidance, state whether it was met/missed.
-Flag any contradictions where management said one thing last quarter but something different now.
-Determine trajectory: is guidance being raised (up), maintained (flat), or cut (down)?""")
+CRITICAL INSTRUCTIONS FOR CROSS-QUARTER COMPARISON:
+1. For each guidance metric in the previous quarter(s), determine:
+   - Was it MET, MISSED, or PARTIALLY met in the current quarter's reported numbers?
+   - Is the SAME guidance being maintained, raised, lowered, or withdrawn now?
+2. For structured_guidance items:
+   - If management repeats similar guidance → revision="maintained"
+   - If numbers are higher than last quarter → revision="raised"
+   - If numbers are lower → revision="lowered"
+   - If a previously guided metric is not mentioned → do NOT create a "continued" item (only include what was actually discussed)
+   - If management explicitly says "we remain on track" → revision="maintained", guidance_type="continued"
+3. Flag any contradictions where management said one thing last quarter but something different now.
+4. Determine overall trajectory: is the guidance direction accelerating (up), decelerating (down), or stable (flat)?""")
 
     parts.append(f"\nFULL TRANSCRIPT (analyze every section thoroughly — do NOT truncate or skip any part):\n{text}")
 
