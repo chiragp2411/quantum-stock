@@ -92,7 +92,11 @@ function ScenarioCard({
       </div>
 
       <CardContent className="p-5 space-y-3">
-        <MetricRow label="Forward EPS" value={`₹${scenario.forward_eps}`} />
+        <MetricRow
+          label="Forward EPS"
+          value={`₹${scenario.forward_eps}`}
+          tooltip={`Current EPS × (1 + ${scenario.growth_rate}%) = ₹${scenario.forward_eps}`}
+        />
         <MetricRow label="Forward PE" value={scenario.forward_pe.toFixed(1)} tooltip={TOOLTIPS.forwardPE} />
         <MetricRow
           label="PEG"

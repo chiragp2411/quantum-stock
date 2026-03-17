@@ -87,6 +87,8 @@ interface GuidancePrefill {
   source: string | null;
   source_label: string | null;
   source_raw_value: string | null;
+  growth_type: string | null;
+  current_pat_margin: number | null;
   trajectory: string | null;
   trajectory_detail: string | null;
   quarter: string | null;
@@ -407,9 +409,15 @@ export default function ValuationPage() {
                         sub={
                           growthOverridden
                             ? `Manually set (guidance was ${prefill.suggested_growth}%)`
-                            : prefill.source_label || "Default (20%)"
+                            : prefill.growth_type === "revenue_proxy"
+                              ? `${prefill.source_label || "Revenue Growth"} → applied as EPS growth (constant margins${prefill.current_pat_margin != null ? ` at ${prefill.current_pat_margin}%` : ""})`
+                              : prefill.growth_type === "derived"
+                                ? `${prefill.source_label || "Derived"} (margin-adjusted)`
+                                : prefill.growth_type === "historical"
+                                  ? `${prefill.source_label || "Historical"} — backward-looking`
+                                  : prefill.source_label || "Default (20%)"
                         }
-                        highlight={growthOverridden ? "blue" : prefill.suggested_growth ? "emerald" : "amber"}
+                        highlight={growthOverridden ? "blue" : prefill.growth_type === "revenue_proxy" ? "amber" : prefill.suggested_growth ? "emerald" : "amber"}
                       />
                       <InfoBlock
                         label="Trajectory"
@@ -724,6 +732,113 @@ export default function ValuationPage() {
                     PEG &gt; 1.5 with low growth = Phase 3 (Trap: expensive with no growth to justify it).
                   </p>
                 </div>
+
+                {/* Margin assumption warning */}
+                {prefill?.growth_type === "revenue_proxy" && (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+                    <div className="flex gap-2">
+                      <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+                      <div className="text-xs text-amber-200/80 space-y-1">
+                        <p className="font-semibold text-amber-400">Revenue Growth Used as EPS Growth — Constant Margin Assumed</p>
+                        <p>
+                          PAT/EPS growth guidance was not available. The {growthRate}% revenue growth rate is applied
+                          directly to EPS, which assumes net profit margins stay constant
+                          {prefill.current_pat_margin != null && (
+                            <> at the current <span className="font-medium text-amber-300">{prefill.current_pat_margin}%</span> PAT margin</>
+                          )}.
+                          If margins expand, actual EPS growth will be higher. If margins compress, it will be lower.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Calculation breakdown */}
+                <div className="rounded-lg border border-border/30 bg-muted/5 px-4 py-3">
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+                    Calculation Breakdown (Base Case)
+                  </h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <tbody className="divide-y divide-border/20">
+                        <tr>
+                          <td className="py-1.5 text-muted-foreground">Current EPS (TTM)</td>
+                          <td className="py-1.5 font-mono font-medium text-right">₹{result.current_eps}</td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3">Trailing twelve months earnings per share</td>
+                        </tr>
+                        <tr>
+                          <td className="py-1.5 text-muted-foreground">Growth Rate Applied</td>
+                          <td className="py-1.5 font-mono font-medium text-right">{growthRate}%</td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3">
+                            {prefill?.growth_type === "pat_direct" && "Direct PAT/EPS growth guidance"}
+                            {prefill?.growth_type === "revenue_proxy" && "Revenue growth used as proxy (constant margins assumed)"}
+                            {prefill?.growth_type === "derived" && "Derived from revenue × margin guidance"}
+                            {prefill?.growth_type === "historical" && "Historical growth rate (backward-looking)"}
+                            {prefill?.growth_type === "default" && "Default rate — no guidance found"}
+                            {!prefill?.growth_type && "Source: " + (prefill?.source_label || "manual")}
+                          </td>
+                        </tr>
+                        <tr className="bg-muted/10">
+                          <td className="py-1.5 font-medium text-foreground">Forward EPS</td>
+                          <td className="py-1.5 font-mono font-semibold text-foreground text-right">₹{result.base.forward_eps}</td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3 font-mono text-[10px]">
+                            = ₹{result.current_eps} &times; (1 + {growthRate}%) = ₹{result.current_eps} &times; {(1 + growthRate / 100).toFixed(2)} = ₹{result.base.forward_eps}
+                          </td>
+                        </tr>
+                        {prefill?.current_pat_margin != null && prefill.growth_type === "revenue_proxy" && (
+                          <tr>
+                            <td className="py-1.5 text-muted-foreground">Current PAT Margin</td>
+                            <td className="py-1.5 font-mono font-medium text-right">{prefill.current_pat_margin}%</td>
+                            <td className="py-1.5 text-amber-400/70 pl-3">Assumed to remain constant for EPS projection</td>
+                          </tr>
+                        )}
+                        <tr>
+                          <td className="py-1.5 text-muted-foreground">Current Price (CMP)</td>
+                          <td className="py-1.5 font-mono font-medium text-right">₹{result.current_price}</td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3">From Yahoo Finance</td>
+                        </tr>
+                        <tr>
+                          <td className="py-1.5 text-muted-foreground">Trailing P/E</td>
+                          <td className="py-1.5 font-mono font-medium text-right">{result.current_pe.toFixed(1)}</td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3 font-mono text-[10px]">
+                            = ₹{result.current_price} &divide; ₹{result.current_eps}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="py-1.5 text-muted-foreground">Forward P/E</td>
+                          <td className="py-1.5 font-mono font-medium text-right">{result.base.forward_pe.toFixed(1)}</td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3 font-mono text-[10px]">
+                            = ₹{result.current_price} &divide; ₹{result.base.forward_eps}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="py-1.5 text-muted-foreground">PEG Ratio</td>
+                          <td className="py-1.5 font-mono font-medium text-right">{result.base.peg.toFixed(2)}</td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3 font-mono text-[10px]">
+                            = {result.base.forward_pe.toFixed(1)} &divide; {growthRate}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="py-1.5 text-muted-foreground">Fair Value (Lynch)</td>
+                          <td className="py-1.5 font-mono font-medium text-right">₹{result.base.fair_value.toLocaleString("en-IN")}</td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3 font-mono text-[10px]">
+                            = ₹{result.current_eps} &times; {growthRate} (P/E should equal growth %)
+                          </td>
+                        </tr>
+                        <tr className="bg-muted/10">
+                          <td className="py-1.5 font-medium text-foreground">Upside</td>
+                          <td className={`py-1.5 font-mono font-semibold text-right ${result.base.upside_pct > 0 ? "text-emerald-500" : "text-red-400"}`}>
+                            {result.base.upside_pct > 0 ? "+" : ""}{result.base.upside_pct}%
+                          </td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3 font-mono text-[10px]">
+                            = (₹{result.base.fair_value.toLocaleString("en-IN")} - ₹{result.current_price}) &divide; ₹{result.current_price} &times; 100
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
                 <ScenarioPanel
                   base={result.base}
                   bull={result.bull}
@@ -746,6 +861,14 @@ export default function ValuationPage() {
                       <p><span className="font-medium text-foreground">Bull/Bear</span> = Base growth &plusmn; delta (default &plusmn;10%)</p>
                     </div>
                   </div>
+                  {prefill?.growth_type === "revenue_proxy" && (
+                    <div className="mt-2 pt-2 border-t border-border/20 text-xs text-amber-400/80">
+                      <span className="font-medium">Important:</span> Growth rate is from revenue growth guidance.
+                      The formula <code className="bg-muted/30 px-1 rounded">Forward EPS = Current EPS &times; (1 + Revenue Growth%)</code> implicitly assumes
+                      PAT margins stay constant{prefill.current_pat_margin != null && <> at {prefill.current_pat_margin}%</>}.
+                      If you expect margin expansion or compression, override the growth rate manually.
+                    </div>
+                  )}
                 </div>
               </div>
             )}

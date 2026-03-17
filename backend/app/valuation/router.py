@@ -186,8 +186,15 @@ def guidance_prefill(symbol: str):
     source_key = None
     source_label = None
     source_raw_value = None
+    growth_type = "unknown"  # "pat_direct" | "revenue_proxy" | "derived" | "historical" | "default"
     assumptions: list[str] = []
     guidance_items_used: list[dict] = []
+
+    current_pat_margin = None
+    if analysis.get("pat_margin_pct") is not None:
+        current_pat_margin = analysis["pat_margin_pct"]
+    elif analysis.get("pat_cr") and analysis.get("revenue_cr") and analysis["revenue_cr"] > 0:
+        current_pat_margin = round(analysis["pat_cr"] / analysis["revenue_cr"] * 100, 1)
 
     fwd_period = _forward_period(quarter)
 
@@ -224,20 +231,26 @@ def guidance_prefill(symbol: str):
     # ===================================================================
     if structured and suggested is None:
         growth_metrics = [
-            ("pat_growth", "PAT Growth"),
-            ("ebitda_growth", "EBITDA Growth"),
-            ("earnings_cagr", "Earnings CAGR"),
-            ("revenue_growth", "Revenue Growth"),
+            ("pat_growth", "PAT Growth", "pat_direct"),
+            ("ebitda_growth", "EBITDA Growth", "revenue_proxy"),
+            ("earnings_cagr", "Earnings CAGR", "pat_direct"),
+            ("revenue_growth", "Revenue Growth", "revenue_proxy"),
         ]
-        for metric_key, label in growth_metrics:
+        for metric_key, label, gtype in growth_metrics:
             items = _sg_items(metric_key, unit="pct")
             val = _sg_value(items)
             if val is not None:
                 _set_found(val, metric_key, f"{label} (management guidance)", items[0].get("value_text", ""), items[:1])
-                if "revenue" in metric_key:
+                growth_type = gtype
+                if "revenue" in metric_key or "ebitda" in metric_key:
+                    margin_note = ""
+                    if current_pat_margin is not None:
+                        margin_note = f" Current PAT margin is {current_pat_margin}%."
                     assumptions.append(
-                        "PAT growth guidance not available. Using revenue growth as proxy — "
-                        "actual PAT growth may differ depending on margin changes."
+                        f"PAT/EPS growth guidance not directly available. Using {label} ({val}%) as proxy. "
+                        f"Forward EPS = Current EPS × (1 + {val}%). "
+                        f"This assumes EPS grows at the same rate as {label.lower()}, "
+                        f"implying net profit margins stay constant.{margin_note}"
                     )
                 break
 
@@ -281,9 +294,15 @@ def guidance_prefill(symbol: str):
                             f"{'CAGR' if years > 1 else 'YoY growth'} of {implied:.1f}%."
                         )
                         if abs_metric == "revenue":
+                            growth_type = "revenue_proxy"
+                            margin_note = f" Current PAT margin: {current_pat_margin}%." if current_pat_margin else ""
                             assumptions.append(
-                                "This is revenue growth, not PAT growth. Actual PAT growth may differ."
+                                f"This is revenue growth, not PAT growth. "
+                                f"Forward EPS = Current EPS × (1 + {implied:.1f}%). "
+                                f"This assumes constant net margins.{margin_note}"
                             )
+                        else:
+                            growth_type = "pat_direct"
                         break
             if suggested is not None:
                 break
@@ -315,11 +334,12 @@ def guidance_prefill(symbol: str):
                     if implied > 0:
                         raw = f"Rev ₹{fwd_rev:.0f}cr × Margin {fwd_margin}% = PAT ₹{fwd_pat:.0f}cr vs trailing ₹{annual_pat:.0f}cr"
                         _set_found(round(implied, 1), "derived_pat_growth", "Derived PAT Growth (Revenue × Margin guidance)", raw, rev_items[:1] + margin_items[:1])
+                        growth_type = "derived"
                         assumptions.append(
                             f"PAT growth calculated from: Forward Revenue (₹{fwd_rev:.0f} cr) × "
                             f"PAT Margin ({fwd_margin}%) = Forward PAT ₹{fwd_pat:.0f} cr, vs "
                             f"trailing annualized PAT ₹{annual_pat:.0f} cr. "
-                            "This is a derived estimate, not direct management guidance."
+                            "This uses both revenue AND margin guidance for a margin-adjusted estimate."
                         )
 
     # ===================================================================
@@ -327,10 +347,10 @@ def guidance_prefill(symbol: str):
     # ===================================================================
     if suggested is None and guidance:
         growth_keywords_priority = [
-            (["pat_growth", "pat_cagr", "earnings_growth", "earnings_cagr"], "PAT/Earnings Growth (legacy)"),
-            (["revenue_growth", "revenue_cagr", "sales_growth", "topline_growth"], "Revenue Growth (legacy)"),
+            (["pat_growth", "pat_cagr", "earnings_growth", "earnings_cagr"], "PAT/Earnings Growth (legacy)", "pat_direct"),
+            (["revenue_growth", "revenue_cagr", "sales_growth", "topline_growth"], "Revenue Growth (legacy)", "revenue_proxy"),
         ]
-        for keyword_group, label in growth_keywords_priority:
+        for keyword_group, label, gtype in growth_keywords_priority:
             for gkey, gval in guidance.items():
                 gkey_lower = gkey.lower().replace(" ", "_").replace("-", "_")
                 if any(kw in gkey_lower for kw in keyword_group):
@@ -340,9 +360,12 @@ def guidance_prefill(symbol: str):
                             val = float(numbers[-1])
                             if val > 0:
                                 _set_found(val, gkey, label, str(gval), [])
+                                growth_type = gtype
                                 if "revenue" in label.lower():
+                                    margin_note = f" Current PAT margin: {current_pat_margin}%." if current_pat_margin else ""
                                     assumptions.append(
-                                        "PAT growth guidance not found. Using revenue/CAGR guidance."
+                                        f"PAT growth not found. Using revenue/CAGR guidance as proxy. "
+                                        f"Assumes constant margins.{margin_note}"
                                     )
                                 break
                         except (ValueError, IndexError):
@@ -357,6 +380,7 @@ def guidance_prefill(symbol: str):
         if analysis.get("pat_growth_yoy_pct") is not None and analysis["pat_growth_yoy_pct"] > 0:
             val = analysis["pat_growth_yoy_pct"]
             _set_found(round(val, 1), "pat_growth_yoy_pct", "Reported PAT Growth YoY% (backward-looking)", f"{val:.1f}%", [])
+            growth_type = "historical"
             assumptions.append(
                 "No forward guidance found in this concall. Using the reported PAT growth "
                 "rate from this quarter. This is backward-looking — future may differ."
@@ -364,9 +388,11 @@ def guidance_prefill(symbol: str):
         elif analysis.get("revenue_growth_yoy_pct") is not None and analysis["revenue_growth_yoy_pct"] > 0:
             val = analysis["revenue_growth_yoy_pct"]
             _set_found(round(val, 1), "revenue_growth_yoy_pct", "Reported Revenue Growth YoY% (backward-looking)", f"{val:.1f}%", [])
+            growth_type = "historical"
+            margin_note = f" Current PAT margin: {current_pat_margin}%." if current_pat_margin else ""
             assumptions.append(
                 "No forward guidance found. Using reported revenue growth as proxy. "
-                "This is backward-looking and revenue-based — PAT growth may differ."
+                f"This is backward-looking and revenue-based. Assumes constant margins.{margin_note}"
             )
 
     # ===================================================================
@@ -385,6 +411,7 @@ def guidance_prefill(symbol: str):
                 if val is not None and val > 0:
                     prev_q = pa.get("quarter", "prior quarter")
                     _set_found(round(val, 1), field, f"{label} from {prev_q} (backward-looking)", f"{val:.1f}%", [])
+                    growth_type = "historical"
                     assumptions.append(
                         f"No forward guidance in latest concall. Using {label} ({val:.1f}%) "
                         f"from {prev_q}. This is backward-looking."
@@ -397,6 +424,7 @@ def guidance_prefill(symbol: str):
     # Strategy 7: Default 20% — absolute last resort
     # ===================================================================
     if suggested is None:
+        growth_type = "default"
         assumptions.append(
             "No forward guidance, no absolute targets, and no historical growth data "
             "found across all analyzed concalls. Growth rate defaults to 20%. "
@@ -415,6 +443,8 @@ def guidance_prefill(symbol: str):
         "source": source_key,
         "source_label": source_label,
         "source_raw_value": source_raw_value,
+        "growth_type": growth_type,
+        "current_pat_margin": current_pat_margin,
         "trajectory": trajectory,
         "trajectory_detail": analysis.get("guidance_trajectory_detail"),
         "quarter": quarter,
