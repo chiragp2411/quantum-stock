@@ -17,6 +17,7 @@ interface SensitivitySliderProps {
   onGrowthChange: (val: number) => void;
   onBullDeltaChange: (val: number) => void;
   onBearDeltaChange: (val: number) => void;
+  growthSourceLabel?: string;
 }
 
 export function SensitivitySlider({
@@ -26,6 +27,7 @@ export function SensitivitySlider({
   onGrowthChange,
   onBullDeltaChange,
   onBearDeltaChange,
+  growthSourceLabel,
 }: SensitivitySliderProps) {
   return (
     <Card className="border-border/40">
@@ -45,7 +47,7 @@ export function SensitivitySlider({
           onChange={onGrowthChange}
           suffix="%"
           color="emerald"
-          description="PAT growth rate from con-call guidance (or your manual estimate)"
+          description={growthSourceLabel || "Growth rate from con-call guidance (or your manual estimate)"}
         />
         <SliderRow
           label="Bull Delta"

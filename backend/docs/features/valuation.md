@@ -41,6 +41,34 @@ return Phase 3
 | Fair Value | Current EPS × Growth Rate |
 | Upside % | (Fair Value - CMP) / CMP × 100 |
 
+### Why Forward EPS = Current EPS × (1 + Growth%)
+
+This is the core formula that projects next year's earnings per share from the current EPS and a growth rate. The formula works directly when the growth rate represents **PAT/EPS growth** — the growth rate IS how much EPS will increase.
+
+**When Revenue Growth is used as proxy:**
+
+If PAT growth guidance is unavailable, the system falls back to revenue growth. Applying revenue growth directly to EPS via `Forward EPS = Current EPS × (1 + Revenue Growth%)` makes an **implicit assumption: net profit margins stay constant**. This means:
+
+- If current PAT margin is 7.5% and revenue grows 67%, the formula assumes PAT also grows 67% (margin stays at 7.5%)
+- In reality: if margins expand (7.5% → 10%), EPS growth > revenue growth; if margins compress (7.5% → 5%), EPS growth < revenue growth
+
+**Why this tradeoff exists:**
+
+1. Revenue growth guidance is available far more often than direct PAT growth guidance
+2. Applying it with the constant-margin assumption gives a useful baseline estimate
+3. The system explicitly warns users when this proxy is used, shows the current PAT margin, and invites them to override
+
+**When the system CAN be smarter (Strategy 3):**
+
+If both revenue guidance AND margin guidance exist, the system uses Strategy 3 to calculate a **margin-adjusted** growth rate: `Forward PAT = Forward Revenue × Forward Margin`, then computes actual PAT growth. This avoids the constant-margin assumption entirely.
+
+**What the frontend shows:**
+
+- Growth type label clearly indicates the source: "PAT Growth (direct)" vs "Revenue Growth → applied as EPS growth (constant margins at X%)"
+- A prominent amber warning banner explains the margin assumption
+- Full calculation breakdown shows every formula and step
+- Users can always override the growth rate manually
+
 ## Full Transparency: What the Page Shows
 
 ### 1. Forward Period
@@ -154,6 +182,8 @@ The `GET /api/valuation/{symbol}/guidance-prefill` endpoint returns:
   "source": "pat_growth",
   "source_label": "PAT Growth (management guidance)",
   "source_raw_value": "25-30% PAT growth expected",
+  "growth_type": "pat_direct",
+  "current_pat_margin": 16.7,
   "trajectory": "up",
   "trajectory_detail": "Growth guidance revised upward from 20% last quarter",
   "quarter": "Q3FY26",

@@ -25,8 +25,14 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
+import {
   Calculator,
   ChevronRight,
+  ChevronDown,
   HelpCircle,
   Loader2,
   Settings2,
@@ -122,6 +128,7 @@ export default function ValuationPage() {
   const [manualPrice, setManualPrice] = useState("");
   const [prefill, setPrefill] = useState<GuidancePrefill | null>(null);
   const [growthOverridden, setGrowthOverridden] = useState(false);
+  const [dataSourceOpen, setDataSourceOpen] = useState(true);
 
   const hasCalculated = useRef(false);
   const baseEpsRef = useRef(0);
@@ -369,19 +376,20 @@ export default function ValuationPage() {
               {/* Guidance Source Card */}
               {prefill && (
                 <Card className="border-border/40">
-                  <CardHeader className="pb-3">
+                  <CardHeader className="pb-3 cursor-pointer" onClick={() => setDataSourceOpen(!dataSourceOpen)}>
                     <div className="flex items-center justify-between">
                       <div>
                         <CardTitle className="text-base flex items-center gap-2">
                           <Eye className="h-4 w-4 text-emerald-500" />
                           Data Source & Transparency
+                          <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${dataSourceOpen ? "" : "-rotate-90"}`} />
                         </CardTitle>
                         <CardDescription className="text-xs mt-0.5">
                           Exactly how the growth rate was determined — every number is traceable to its source
                         </CardDescription>
                       </div>
                       {prefill.quarter && (
-                        <Link href={`/stock/${encodeURIComponent(symbol)}/concalls`}>
+                        <Link href={`/stock/${encodeURIComponent(symbol)}/concalls`} onClick={(e) => e.stopPropagation()}>
                           <Button variant="outline" size="sm" className="text-xs gap-1.5">
                             <ExternalLink className="h-3 w-3" />
                             View Con-Call
@@ -390,6 +398,7 @@ export default function ValuationPage() {
                       )}
                     </div>
                   </CardHeader>
+                  {dataSourceOpen && (
                   <CardContent className="space-y-4">
                     {/* Source concall info */}
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -579,6 +588,7 @@ export default function ValuationPage() {
                       </div>
                     )}
                   </CardContent>
+                  )}
                 </Card>
               )}
 
@@ -625,7 +635,11 @@ export default function ValuationPage() {
             </div>
 
             {/* Controls */}
-            <div className="grid gap-6 lg:grid-cols-2 mb-8">
+            <SectionCollapsible
+              title="Sensitivity Controls & Overrides"
+              icon={<Settings2 className="h-5 w-5 text-muted-foreground" />}
+            >
+            <div className="grid gap-6 lg:grid-cols-2 mb-4">
               <SensitivitySlider
                 growthRate={growthRate}
                 bullDelta={bullDelta}
@@ -633,6 +647,19 @@ export default function ValuationPage() {
                 onGrowthChange={handleGrowthChange}
                 onBullDeltaChange={setBullDelta}
                 onBearDeltaChange={setBearDelta}
+                growthSourceLabel={
+                  prefill?.growth_type === "pat_direct"
+                    ? "PAT growth rate from con-call guidance (or your manual estimate)"
+                    : prefill?.growth_type === "revenue_proxy"
+                      ? "Revenue growth used as EPS proxy — assumes constant margins (or your manual estimate)"
+                      : prefill?.growth_type === "derived"
+                        ? "Derived from revenue × margin guidance (or your manual estimate)"
+                        : prefill?.growth_type === "historical"
+                          ? "Historical growth rate — backward-looking (or your manual estimate)"
+                          : prefill?.growth_type === "default"
+                            ? "Default 20% — no guidance found. Override with your own research."
+                            : "Growth rate from con-call guidance (or your manual estimate)"
+                }
               />
 
               <Card className="border-border/40">
@@ -716,35 +743,35 @@ export default function ValuationPage() {
                 </CardContent>
               </Card>
             </div>
+            </SectionCollapsible>
 
             {/* Scenario results */}
             {result && (
               <div className="space-y-5">
-                <div>
-                  <h3 className="text-lg font-semibold">
-                    Scenario Analysis — {forwardPeriod}
-                  </h3>
-                  <p className="text-xs text-muted-foreground mt-1 max-w-2xl">
+                <SectionCollapsible
+                  title={`Scenario Analysis — ${forwardPeriod}`}
+                  icon={<Calculator className="h-5 w-5 text-emerald-500" />}
+                >
+                  <p className="text-xs text-muted-foreground mb-4 max-w-2xl">
                     Three scenarios using {growthRate}% as the base growth rate
                     {prefill?.source_label ? ` (from ${prefill.source_label})` : ""}.
                     Fair Value = EPS &times; Growth Rate (Lynch formula).
                     PEG &lt; 1 = Phase 1 (Bargain: stock is undervalued for its growth).
                     PEG &gt; 1.5 with low growth = Phase 3 (Trap: expensive with no growth to justify it).
                   </p>
-                </div>
 
                 {/* Margin assumption warning */}
                 {prefill?.growth_type === "revenue_proxy" && (
                   <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
                     <div className="flex gap-2">
                       <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
-                      <div className="text-xs text-amber-200/80 space-y-1">
-                        <p className="font-semibold text-amber-400">Revenue Growth Used as EPS Growth — Constant Margin Assumed</p>
-                        <p>
+                      <div className="text-xs space-y-1">
+                        <p className="font-semibold text-amber-500">Revenue Growth Used as EPS Growth — Constant Margin Assumed</p>
+                        <p className="text-muted-foreground leading-relaxed">
                           PAT/EPS growth guidance was not available. The {growthRate}% revenue growth rate is applied
                           directly to EPS, which assumes net profit margins stay constant
                           {prefill.current_pat_margin != null && (
-                            <> at the current <span className="font-medium text-amber-300">{prefill.current_pat_margin}%</span> PAT margin</>
+                            <> at the current <span className="font-semibold text-amber-500">{prefill.current_pat_margin}%</span> PAT margin</>
                           )}.
                           If margins expand, actual EPS growth will be higher. If margins compress, it will be lower.
                         </p>
@@ -760,18 +787,28 @@ export default function ValuationPage() {
                   </h4>
                   <div className="overflow-x-auto">
                     <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-border/30">
+                          <th className="text-left py-1.5 text-muted-foreground/70 font-medium w-[180px]">Metric</th>
+                          <th className="text-right py-1.5 text-muted-foreground/70 font-medium w-[100px]">Value</th>
+                          <th className="text-left py-1.5 text-muted-foreground/70 font-medium pl-3 w-[200px]">Formula</th>
+                          <th className="text-left py-1.5 text-muted-foreground/70 font-medium pl-3">Calculation</th>
+                        </tr>
+                      </thead>
                       <tbody className="divide-y divide-border/20">
                         <tr>
                           <td className="py-1.5 text-muted-foreground">Current EPS (TTM)</td>
                           <td className="py-1.5 font-mono font-medium text-right">₹{result.current_eps}</td>
-                          <td className="py-1.5 text-muted-foreground/60 pl-3">Trailing twelve months earnings per share</td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3 text-[10px]">Input</td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3 text-[10px]">Trailing twelve months earnings per share</td>
                         </tr>
                         <tr>
                           <td className="py-1.5 text-muted-foreground">Growth Rate Applied</td>
                           <td className="py-1.5 font-mono font-medium text-right">{growthRate}%</td>
-                          <td className="py-1.5 text-muted-foreground/60 pl-3">
-                            {prefill?.growth_type === "pat_direct" && "Direct PAT/EPS growth guidance"}
-                            {prefill?.growth_type === "revenue_proxy" && "Revenue growth used as proxy (constant margins assumed)"}
+                          <td className="py-1.5 text-muted-foreground/60 pl-3 text-[10px]">Input</td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3 text-[10px]">
+                            {prefill?.growth_type === "pat_direct" && "Direct PAT/EPS growth from management guidance"}
+                            {prefill?.growth_type === "revenue_proxy" && "Revenue growth used as EPS growth proxy (constant margins assumed)"}
                             {prefill?.growth_type === "derived" && "Derived from revenue × margin guidance"}
                             {prefill?.growth_type === "historical" && "Historical growth rate (backward-looking)"}
                             {prefill?.growth_type === "default" && "Default rate — no guidance found"}
@@ -781,48 +818,55 @@ export default function ValuationPage() {
                         <tr className="bg-muted/10">
                           <td className="py-1.5 font-medium text-foreground">Forward EPS</td>
                           <td className="py-1.5 font-mono font-semibold text-foreground text-right">₹{result.base.forward_eps}</td>
+                          <td className="py-1.5 text-muted-foreground pl-3 text-[10px]">Current EPS &times; (1 + Growth%)</td>
                           <td className="py-1.5 text-muted-foreground/60 pl-3 font-mono text-[10px]">
-                            = ₹{result.current_eps} &times; (1 + {growthRate}%) = ₹{result.current_eps} &times; {(1 + growthRate / 100).toFixed(2)} = ₹{result.base.forward_eps}
+                            ₹{result.current_eps} &times; (1 + {growthRate}%) = ₹{result.current_eps} &times; {(1 + growthRate / 100).toFixed(2)} = ₹{result.base.forward_eps}
                           </td>
                         </tr>
                         {prefill?.current_pat_margin != null && prefill.growth_type === "revenue_proxy" && (
                           <tr>
                             <td className="py-1.5 text-muted-foreground">Current PAT Margin</td>
                             <td className="py-1.5 font-mono font-medium text-right">{prefill.current_pat_margin}%</td>
-                            <td className="py-1.5 text-amber-400/70 pl-3">Assumed to remain constant for EPS projection</td>
+                            <td className="py-1.5 text-amber-400/70 pl-3 text-[10px]">Held constant</td>
+                            <td className="py-1.5 text-amber-400/70 pl-3 text-[10px]">Assumed to remain constant for EPS projection</td>
                           </tr>
                         )}
                         <tr>
                           <td className="py-1.5 text-muted-foreground">Current Price (CMP)</td>
                           <td className="py-1.5 font-mono font-medium text-right">₹{result.current_price}</td>
-                          <td className="py-1.5 text-muted-foreground/60 pl-3">From Yahoo Finance</td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3 text-[10px]">Input</td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3 text-[10px]">From Yahoo Finance</td>
                         </tr>
                         <tr>
                           <td className="py-1.5 text-muted-foreground">Trailing P/E</td>
                           <td className="py-1.5 font-mono font-medium text-right">{result.current_pe.toFixed(1)}</td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3 text-[10px]">CMP &divide; Current EPS</td>
                           <td className="py-1.5 text-muted-foreground/60 pl-3 font-mono text-[10px]">
-                            = ₹{result.current_price} &divide; ₹{result.current_eps}
+                            ₹{result.current_price} &divide; ₹{result.current_eps} = {result.current_pe.toFixed(1)}
                           </td>
                         </tr>
                         <tr>
                           <td className="py-1.5 text-muted-foreground">Forward P/E</td>
                           <td className="py-1.5 font-mono font-medium text-right">{result.base.forward_pe.toFixed(1)}</td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3 text-[10px]">CMP &divide; Forward EPS</td>
                           <td className="py-1.5 text-muted-foreground/60 pl-3 font-mono text-[10px]">
-                            = ₹{result.current_price} &divide; ₹{result.base.forward_eps}
+                            ₹{result.current_price} &divide; ₹{result.base.forward_eps} = {result.base.forward_pe.toFixed(1)}
                           </td>
                         </tr>
                         <tr>
                           <td className="py-1.5 text-muted-foreground">PEG Ratio</td>
                           <td className="py-1.5 font-mono font-medium text-right">{result.base.peg.toFixed(2)}</td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3 text-[10px]">Forward P/E &divide; Growth%</td>
                           <td className="py-1.5 text-muted-foreground/60 pl-3 font-mono text-[10px]">
-                            = {result.base.forward_pe.toFixed(1)} &divide; {growthRate}
+                            {result.base.forward_pe.toFixed(1)} &divide; {growthRate} = {result.base.peg.toFixed(2)}
                           </td>
                         </tr>
                         <tr>
                           <td className="py-1.5 text-muted-foreground">Fair Value (Lynch)</td>
                           <td className="py-1.5 font-mono font-medium text-right">₹{result.base.fair_value.toLocaleString("en-IN")}</td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3 text-[10px]">EPS &times; Growth% (P/E = Growth)</td>
                           <td className="py-1.5 text-muted-foreground/60 pl-3 font-mono text-[10px]">
-                            = ₹{result.current_eps} &times; {growthRate} (P/E should equal growth %)
+                            ₹{result.current_eps} &times; {growthRate} = ₹{result.base.fair_value.toLocaleString("en-IN")}
                           </td>
                         </tr>
                         <tr className="bg-muted/10">
@@ -830,8 +874,9 @@ export default function ValuationPage() {
                           <td className={`py-1.5 font-mono font-semibold text-right ${result.base.upside_pct > 0 ? "text-emerald-500" : "text-red-400"}`}>
                             {result.base.upside_pct > 0 ? "+" : ""}{result.base.upside_pct}%
                           </td>
+                          <td className="py-1.5 text-muted-foreground/60 pl-3 text-[10px]">(Fair Value − CMP) &divide; CMP &times; 100</td>
                           <td className="py-1.5 text-muted-foreground/60 pl-3 font-mono text-[10px]">
-                            = (₹{result.base.fair_value.toLocaleString("en-IN")} - ₹{result.current_price}) &divide; ₹{result.current_price} &times; 100
+                            (₹{result.base.fair_value.toLocaleString("en-IN")} − ₹{result.current_price}) &divide; ₹{result.current_price} &times; 100 = {result.base.upside_pct > 0 ? "+" : ""}{result.base.upside_pct}%
                           </td>
                         </tr>
                       </tbody>
@@ -870,12 +915,46 @@ export default function ValuationPage() {
                     </div>
                   )}
                 </div>
+                </SectionCollapsible>
               </div>
             )}
           </>
         )}
       </main>
     </>
+  );
+}
+
+function SectionCollapsible({
+  title,
+  icon,
+  defaultOpen = true,
+  badge,
+  children,
+}: {
+  title: string;
+  icon?: React.ReactNode;
+  defaultOpen?: boolean;
+  badge?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger className="flex items-center justify-between w-full group cursor-pointer py-1">
+        <div className="flex items-center gap-2">
+          {icon}
+          <h3 className="text-lg font-semibold">{title}</h3>
+          {badge}
+        </div>
+        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${open ? "" : "-rotate-90"}`} />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="pt-3">
+          {children}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
